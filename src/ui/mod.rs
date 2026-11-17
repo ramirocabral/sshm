@@ -16,6 +16,7 @@ use crate::term::render::{self, RenderOpts};
 pub const ACCENT: Color = Color::Cyan;
 pub const BROADCAST: Color = Color::Red;
 pub const MUTED: Color = Color::DarkGray;
+const VISUAL_BG: Color = Color::Indexed(238);
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -52,8 +53,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Sidebar;
+    if !focused {
+        app.sidebar.visual = None;
+    }
+    let items = app.sidebar.items(&app.store);
+    app.sidebar.clamp(items.len());
+    let visual = app.sidebar.visual_range();
     let border = if focused { Style::default().fg(ACCENT) } else { Style::default().fg(MUTED) };
     let title = match (&app.sidebar.search, app.sidebar.query.is_empty()) {
+        _ if visual.is_some() => format!(" Hosts · {} selected ", app.sidebar.visual_hosts(&app.store, &items).len()),
         (Some(_), _) => " Search ".to_string(),
         (None, false) => format!(" Hosts · /{} ", app.sidebar.query),
         _ => format!(" Hosts ({}) ", app.store.hosts.len()),
@@ -73,9 +81,6 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         list_area = rest;
     }
     app.layout.sidebar_list = list_area;
-
-    let items = app.sidebar.items(&app.store);
-    app.sidebar.clamp(items.len());
     app.sidebar.ensure_visible(list_area.height as usize);
     if items.is_empty() {
         let msg = if app.sidebar.query.is_empty() {
@@ -117,13 +122,16 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 (format!("{indent}{mark} {label}"), style)
             }
         };
+        let in_visual = visual.is_some_and(|(lo, hi)| (lo..=hi).contains(&idx));
         let style = if selected {
             if focused { style.add_modifier(Modifier::REVERSED) } else { style.add_modifier(Modifier::UNDERLINED) }
+        } else if in_visual {
+            style.bg(VISUAL_BG)
         } else {
             style
         };
         let line_rect = Rect { x: list_area.x, y, width: list_area.width, height: 1 };
-        if selected {
+        if selected || in_visual {
             f.buffer_mut().set_style(line_rect, style);
         }
         f.buffer_mut().set_stringn(list_area.x, y, &text, list_area.width as usize, style);
@@ -285,6 +293,7 @@ fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(vec![k("Enter"), Span::raw("  connect to the selected host")]),
         Line::from(vec![k("Space"), Span::raw("  mark several → Enter opens them in a grid")]),
+        Line::from(vec![k("v"), Span::raw("  select a range with j/k → Enter opens it in a grid")]),
         Line::from(vec![k("o"), Span::raw("  add the host to the current tab")]),
         Line::from(vec![k("s"), Span::raw("  SFTP to the host")]),
         Line::from(vec![k("n / e / d"), Span::raw("  new / edit / delete host")]),
@@ -314,6 +323,11 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled(format!(" BROADCAST {n} "), Style::default().fg(Color::White).bg(BROADCAST).add_modifier(Modifier::BOLD)));
             spans.push(Span::raw(" "));
         }
+    let sidebar_visual = app.focus == Focus::Sidebar && app.sidebar.visual.is_some();
+    if sidebar_visual {
+        spans.push(Span::styled(" VISUAL ", Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)));
+        spans.push(Span::raw(" "));
+    }
     if app.focused_pane().is_some_and(|p| p.copy_mode) {
         spans.push(Span::styled(" COPY ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)));
         spans.push(Span::raw(" "));
@@ -332,12 +346,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ));
     } else if app.leader_pending {
         spans.push(Span::styled(
-            "n new · s sftp · d duplicate · b broadcast · x exclude · p/P password · [ copy · z zoom · r reconnect · w close · ? help",
+            "n new · s sftp · d duplicate · b broadcast · x exclude · p/P password · [ copy · z zoom · r reconnect · w/W close pane/tab · ? help",
+            Style::default().fg(Color::Gray),
+        ));
+    } else if sidebar_visual {
+        spans.push(Span::styled(
+            "j/k extend · Enter open in a grid · o add to tab · Space mark · Esc cancel",
             Style::default().fg(Color::Gray),
         ));
     } else if app.focus == Focus::Sidebar {
         spans.push(Span::styled(
-            "Enter connect · Space mark · o add to tab · s sftp · n/e/d host · / search · ? help",
+            "Enter connect · Space mark · v select · o add to tab · s sftp · n/e/d host · / search · ? help",
             Style::default().fg(Color::Gray),
         ));
     } else {

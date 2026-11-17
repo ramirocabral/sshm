@@ -45,9 +45,10 @@ sshm import ssh-config ~/.ssh/config   # optional: bring your hosts in
 sshm                                   # open the TUI
 ```
 
-In the host list, `n` creates a host and `Enter` connects. `Space` marks several hosts, and
-`Enter` then opens them all in a grid. Inside a session, everything goes to the remote side
-except the **leader key**, `Ctrl+Space` by default. `Ctrl+Space ?` shows every binding.
+In the host list, `n` creates a host and `Enter` connects. `Space` marks several hosts (or `v`
+selects a range, like vim's visual mode), and `Enter` then opens them all in a grid. Inside a
+session, everything goes to the remote side except the **leader key**, `Ctrl+Space` by
+default. `Ctrl+Space ?` shows every binding.
 
 ### Key bindings
 
@@ -69,6 +70,7 @@ Inside a session, press the leader key first:
 | `[` | copy mode (vi keys: `v`, `V`, `Ctrl+v`, `y`) |
 | `r` | reconnect |
 | `w` | close the pane |
+| `W` | close the whole tab, without asking |
 | `t` | local shell |
 | `n` / `e` | new host / edit the current host |
 | `i` | import |
@@ -85,6 +87,7 @@ Keys in the host list:
 | `Enter` | connect, or open every marked host in a grid |
 | `o` | open in the current tab |
 | `Space` | mark a host (on a folder: mark all its hosts) |
+| `v` / `V` | visual mode: `j`/`k` extend the range, `Enter` opens it in a grid, `o` in the current tab, `Space` marks it, `Esc` cancels |
 | `/` | fuzzy search |
 | `n`, `e`, `c`, `d` | new, edit, duplicate, delete |
 | `s` | SFTP |

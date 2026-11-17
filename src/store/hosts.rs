@@ -219,6 +219,13 @@ impl HostStore {
         self.hosts.iter().find(|h| h.path() == path)
     }
 
+    /// Hosts in `folder` or any of its subfolders.
+    pub fn hosts_under<'a>(&'a self, folder: &'a str) -> impl Iterator<Item = &'a Host> + 'a {
+        self.hosts
+            .iter()
+            .filter(move |h| h.folder == folder || h.folder.strip_prefix(folder).is_some_and(|rest| rest.starts_with('/')))
+    }
+
     pub fn upsert(&mut self, host: Host) {
         if let Some(existing) = self.get_mut(&host.id) {
             *existing = host;

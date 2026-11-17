@@ -18,6 +18,8 @@ pub struct Sidebar {
     pub selected: usize,
     pub scroll: usize,
     pub marked: HashSet<String>,
+    /// Anchor row of the visual selection; the range runs from it to `selected`.
+    pub visual: Option<usize>,
     pub search: Option<TextInput>,
     pub query: String,
     initialized: bool,
@@ -41,7 +43,7 @@ impl Sidebar {
     fn push_level(&self, store: &HostStore, folders: &[String], parent: &str, depth: usize, out: &mut Vec<Item>) {
         for f in folders.iter().filter(|f| parent_of(f) == parent) {
             let expanded = self.expanded.contains(f);
-            let count = store.hosts.iter().filter(|h| h.folder == *f || h.folder.starts_with(&format!("{f}/"))).count();
+            let count = store.hosts_under(f).count();
             let name = f.rsplit('/').next().unwrap_or(f).to_string();
             out.push(Item::Folder { path: f.clone(), name, depth, expanded, count });
             if expanded {
@@ -70,10 +72,47 @@ impl Sidebar {
     }
 
     pub fn clamp(&mut self, len: usize) {
-        if len == 0 {
-            self.selected = 0;
-        } else if self.selected >= len {
-            self.selected = len - 1;
+        let last = len.saturating_sub(1);
+        self.selected = self.selected.min(last);
+        if let Some(anchor) = self.visual.as_mut() {
+            *anchor = (*anchor).min(last);
+        }
+    }
+
+    pub fn visual_range(&self) -> Option<(usize, usize)> {
+        self.visual.map(|a| (a.min(self.selected), a.max(self.selected)))
+    }
+
+    /// Hosts covered by the visual selection, in list order. A collapsed folder stands for all
+    /// its hosts; an expanded one adds nothing, since its visible rows count on their own.
+    pub fn visual_hosts(&self, store: &HostStore, items: &[Item]) -> Vec<String> {
+        let Some((lo, hi)) = self.visual_range() else { return Vec::new() };
+        let hi = hi.min(items.len().saturating_sub(1));
+        let mut out: Vec<String> = Vec::new();
+        let mut push = |id: &str| {
+            if !out.iter().any(|o| o == id) {
+                out.push(id.to_string());
+            }
+        };
+        for item in items.get(lo..=hi).unwrap_or(&[]) {
+            match item {
+                Item::Host { id, .. } => push(id),
+                Item::Folder { path, expanded: false, .. } => store.hosts_under(path).for_each(|h| push(&h.id)),
+                Item::Folder { .. } => {}
+            }
+        }
+        out
+    }
+
+    /// Marks every host in `ids`, or unmarks them all if they were all marked already.
+    pub fn toggle_marks(&mut self, ids: Vec<String>) {
+        let all = ids.iter().all(|i| self.marked.contains(i));
+        for i in ids {
+            if all {
+                self.marked.remove(&i);
+            } else {
+                self.marked.insert(i);
+            }
         }
     }
 
@@ -130,5 +169,32 @@ mod tests {
         sb.query = "web".into();
         let found = sb.items(&store);
         assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn visual_selection() {
+        let mut store = HostStore::default();
+        for (name, folder) in [("web1", "acme/prod"), ("db1", "acme/prod"), ("lab", ""), ("bastion", "acme")] {
+            store.upsert(Host { name: name.into(), folder: folder.into(), host: format!("{name}.local"), ..Host::default() });
+        }
+        let name = |ids: Vec<String>| -> Vec<String> { ids.iter().map(|id| store.get(id).unwrap().name.clone()).collect() };
+        let mut sb = Sidebar::default();
+        // acme ▾, acme/prod ▸ (collapsed: stands for db1 + web1), bastion, lab
+        let items = sb.items(&store);
+        sb.selected = 3;
+        sb.visual = Some(1);
+        assert_eq!(name(sb.visual_hosts(&store, &items)), ["db1", "web1", "bastion", "lab"]);
+
+        // The cursor above the anchor works too, and an expanded folder row adds nothing by itself.
+        sb.expanded.insert("acme/prod".into());
+        let items = sb.items(&store);
+        sb.visual = Some(2);
+        sb.selected = 0;
+        assert_eq!(name(sb.visual_hosts(&store, &items)), ["db1"]);
+
+        sb.toggle_marks(sb.visual_hosts(&store, &items));
+        assert!(sb.marked.contains(&store.hosts.iter().find(|h| h.name == "db1").unwrap().id));
+        sb.clamp(0);
+        assert_eq!((sb.selected, sb.visual), (0, Some(0)));
     }
 }

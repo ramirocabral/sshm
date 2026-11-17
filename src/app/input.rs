@@ -271,6 +271,7 @@ impl App {
                 }
             }
             KeyCode::Char('w') => self.close_current(),
+            KeyCode::Char('W') => self.remove_tab(self.active),
             KeyCode::Char('z') => {
                 if let Some(t) = self.active_term_tab_mut() {
                     t.zoomed = !t.zoomed;
@@ -566,21 +567,35 @@ impl App {
             }
             return;
         }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.sidebar_motion(&key) {
+            return;
+        }
+        if self.sidebar.visual.is_some() {
+            match key.code {
+                KeyCode::Enter => self.sidebar_activate(false),
+                KeyCode::Char('o') => self.sidebar_activate(true),
+                KeyCode::Char(' ') => {
+                    let items = self.sidebar.items(&self.store);
+                    let ids = self.sidebar.visual_hosts(&self.store, &items);
+                    self.sidebar.visual = None;
+                    self.sidebar.toggle_marks(ids);
+                }
+                KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') | KeyCode::Char('q') => self.sidebar.visual = None,
+                _ => {}
+            }
+            return;
+        }
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.sidebar_move(1),
-            KeyCode::Char('k') | KeyCode::Up => self.sidebar_move(-1),
-            KeyCode::Char('d') if ctrl => self.sidebar_move(10),
-            KeyCode::Char('u') if ctrl => self.sidebar_move(-10),
-            KeyCode::PageDown => self.sidebar_move(10),
-            KeyCode::PageUp => self.sidebar_move(-10),
-            KeyCode::Char('g') | KeyCode::Home => self.sidebar.selected = 0,
-            KeyCode::Char('G') | KeyCode::End => self.sidebar.selected = usize::MAX,
             KeyCode::Char('l') | KeyCode::Right => self.sidebar_expand(true),
             KeyCode::Char('h') | KeyCode::Left => self.sidebar_expand(false),
             KeyCode::Enter => self.sidebar_activate(false),
             KeyCode::Char('o') => self.sidebar_activate(true),
             KeyCode::Char(' ') => self.sidebar_toggle_mark(),
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                if !self.sidebar.items(&self.store).is_empty() {
+                    self.sidebar.visual = Some(self.sidebar.selected);
+                }
+            }
             KeyCode::Char('/') => {
                 self.sidebar.search = Some(TextInput::new(self.sidebar.query.clone()));
             }
@@ -636,6 +651,23 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Cursor movement, shared by the normal and the visual mode of the host list.
+    fn sidebar_motion(&mut self, key: &KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => self.sidebar_move(1),
+            KeyCode::Char('k') | KeyCode::Up => self.sidebar_move(-1),
+            KeyCode::Char('d') if ctrl => self.sidebar_move(10),
+            KeyCode::Char('u') if ctrl => self.sidebar_move(-10),
+            KeyCode::PageDown => self.sidebar_move(10),
+            KeyCode::PageUp => self.sidebar_move(-10),
+            KeyCode::Char('g') | KeyCode::Home => self.sidebar.selected = 0,
+            KeyCode::Char('G') | KeyCode::End => self.sidebar.selected = self.sidebar.items(&self.store).len().saturating_sub(1),
+            _ => return false,
+        }
+        true
     }
 
     fn sidebar_move(&mut self, delta: isize) {
@@ -694,31 +726,30 @@ impl App {
                 self.sidebar_move(1);
             }
             Some(Item::Folder { path, .. }) => {
-                let ids: Vec<String> = self
-                    .store
-                    .hosts
-                    .iter()
-                    .filter(|h| h.folder == *path || h.folder.starts_with(&format!("{path}/")))
-                    .map(|h| h.id.clone())
-                    .collect();
-                let all = ids.iter().all(|i| self.sidebar.marked.contains(i));
-                for i in ids {
-                    if all {
-                        self.sidebar.marked.remove(&i);
-                    } else {
-                        self.sidebar.marked.insert(i);
-                    }
-                }
+                let ids = self.store.hosts_under(path).map(|h| h.id.clone()).collect();
+                self.sidebar.toggle_marks(ids);
             }
             None => {}
         }
     }
 
-    /// Enter connects (all marked hosts in a grid if there are marks); `into_current` adds to the active tab.
+    /// Enter connects: the visual selection plus the marked hosts in a grid if there are any,
+    /// else the host under the cursor. `into_current` adds them to the active tab instead.
     pub fn sidebar_activate(&mut self, into_current: bool) {
-        if !self.sidebar.marked.is_empty() {
-            let mut ids: Vec<String> = self.sidebar.marked.drain().collect();
-            ids.sort_by_key(|id| self.store.hosts.iter().position(|h| h.id == *id).unwrap_or(usize::MAX));
+        let mut ids = Vec::new();
+        if self.sidebar.visual.is_some() {
+            let items = self.sidebar.items(&self.store);
+            ids = self.sidebar.visual_hosts(&self.store, &items);
+            if ids.is_empty() && self.sidebar.marked.is_empty() {
+                self.info("No hosts in the selection");
+                return;
+            }
+            self.sidebar.visual = None;
+        }
+        let mut marked: Vec<String> = self.sidebar.marked.drain().filter(|id| !ids.contains(id)).collect();
+        marked.sort_by_key(|id| self.store.hosts.iter().position(|h| h.id == *id).unwrap_or(usize::MAX));
+        ids.extend(marked);
+        if !ids.is_empty() {
             if into_current {
                 for id in ids {
                     self.open_in_current(Some(id));
