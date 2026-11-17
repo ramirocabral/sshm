@@ -1,0 +1,6 @@
+[remmina]
+name=legacy
+protocol=SSH
+server=legacy.lab
+ssh_username=viejo
+ssh_auth=3

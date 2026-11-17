@@ -1,0 +1,111 @@
+---
+config version: 3
+defaults:
+  proxy: Jump
+  jump ip: gw.lab
+  jump port: 22
+  jump user: ops
+  sudo password: 53616c7465645f5f4e61bc00000000005c4aa135f78c9e29
+environments:
+  __PAC__ROOT__:
+    _is_group: 1
+    children:
+      g-clientes: 1
+      g-lab: 1
+    name: __PAC__ROOT__
+  __PAC_SHELL__:
+    _is_group: 0
+    ip: bash
+    method: PACShell
+    name: PACShell
+    parent: __PAC__ROOT__
+    pass: ''
+  g-clientes:
+    _is_group: 1
+    description: Clientes
+    name: Clientes
+    parent: __PAC__ROOT__
+  g-acme:
+    _is_group: 1
+    name: ACME
+    parent: g-clientes
+  g-acme-db:
+    _is_group: 1
+    name: Base de datos
+    parent: g-acme
+  g-lab:
+    _is_group: 1
+    name: Lab
+    parent: __PAC__ROOT__
+  1b4e28ba-2fa1-11d2-883f-0016d3cca427:
+    _is_group: 0
+    _protected: 0
+    auth fallback: 1
+    auth type: userpass
+    description: Connection with 'web-01'
+    ip: 10.20.0.11
+    method: SSH
+    name: web-01
+    options: ' -C -o "ServerAliveInterval=20"'
+    parent: g-acme
+    pass: 53616c7465645f5f4e61bc00000000006f0c2c547d7b879902c40441878db526ba9abeb7ee428abe
+    passphrase: 53616c7465645f5f4e61bc00000000005c4aa135f78c9e29
+    passphrase user: ''
+    port: 2222
+    public key: ''
+    title: web-01
+    use proxy: 2
+    user: deploy
+  2c5f39cb-3fb2-22e3-994f-1127e4ddb538:
+    _is_group: 0
+    auth type: publickey
+    description: Base principal
+    ip: 10.20.0.12
+    jump ip: bastion.acme.com
+    jump port: 2200
+    jump user: jumper
+    method: SSH
+    name: db-01
+    options: ''
+    parent: g-acme-db
+    pass: 53616c7465645f5f4e61bc00000000005c4aa135f78c9e29
+    passphrase: 53616c7465645f5f4e61bc0000000000d5d89da29cfec1232d2345d048214a5ec228bb12bacd8c9f
+    passphrase user: postgres
+    port: '22'
+    public key: /home/ramiro/.ssh/acme_db
+    use proxy: 3
+    user: postgres
+  3d6a4adc-4ac3-33f4-aa50-2238f5eec649:
+    _is_group: 0
+    auth type: userpass
+    ip: nas.lab
+    method: SSH
+    name: nas
+    parent: g-lab
+    pass: 53616c7465645f5f31323334353637380f375f4507f78c06f0093701603dad09
+    port: 22
+    use proxy: 0
+    user: admin
+  4e7b5bed-5bd4-44a5-bb61-3349a6ffd75a:
+    _is_group: 0
+    auth type: userpass
+    ip: 192.168.0.1
+    method: ssh
+    name: router
+    parent: __PAC__ROOT__
+    pass: 53616c7465645f5f4e61bc0000000000deadbeefdeadbeef
+    port: 22
+    use proxy: 1
+    proxy ip: 127.0.0.1
+    proxy port: 1080
+    user: admin
+  5f8c6cfe-6ce5-55b6-cc72-445ab7a0e86b:
+    _is_group: 0
+    auth type: userpass
+    ip: 10.0.0.50
+    method: RDP (xfreerdp)
+    name: Escritorio
+    parent: g-lab
+    pass: ''
+    port: 3389
+    user: Administrador

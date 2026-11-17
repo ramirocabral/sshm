@@ -1,0 +1,7 @@
+[remmina]
+name=Escritorio
+group=Lab
+protocol=RDP
+server=10.0.0.50
+username=Administrador
+password=Fu/83MkuPwArmrKs3bvdrQ==

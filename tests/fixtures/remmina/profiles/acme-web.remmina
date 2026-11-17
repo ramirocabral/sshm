@@ -1,0 +1,12 @@
+[remmina]
+name=web-01
+group=Clientes/ACME
+protocol=SSH
+server=10.20.0.11:2222
+username=deploy
+password=Bvhx+pDxwgZ6sArGwvShhw==
+ssh_auth=0
+ssh_privatekey=
+ssh_passphrase=
+ssh_charset=UTF-8
+window_maximize=0

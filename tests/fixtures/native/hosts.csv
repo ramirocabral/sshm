@@ -1,0 +1,7 @@
+name,folder,host,port,user,identity_file,jump,tags,password,root_password,notes
+web-01,Clientes/ACME,10.0.0.10,2222,deploy,~/.ssh/acme,,prod;web,"s3cr3t,""ok""",t00r,Web server
+db-01,Clientes/ACME,10.0.0.11,,postgres,,,db,,,"réplica
+principal"
+,,10.1.1.1,abc,,,,,,,
+router,lab/,192.168.0.1,,admin,,admin@bastion:2200,,,,
+no-host,,,,,,,,,,

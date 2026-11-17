@@ -1,0 +1,11 @@
+[remmina]
+name=nas
+group=Lab
+protocol=SSH
+server=nas.lab
+username=admin
+password=
+ssh_auth=1
+ssh_privatekey=/home/ramiro/.ssh/nas
+ssh_passphrase=88evZ7YhVgYqt1pyg56Fsw==
+ssh_proxycommand=ssh -W %h:%p gw.lab

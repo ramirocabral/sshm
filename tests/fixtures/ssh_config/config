@@ -1,0 +1,43 @@
+# Main config
+Include conf.d/*.conf
+Include missing-include.conf
+
+Host bastion
+    HostName bastion.example.com
+    User admin
+    IdentityFile ~/.ssh/id_ed25519
+
+Host web1 web2
+    HostName %h.internal.example.com
+    User deploy
+    ProxyJump bastion
+
+Host web1
+    Port 2201
+    IdentityFile ~/.ssh/id_web
+    User ignored   # first obtained value wins: deploy
+
+Host db
+    User postgres
+    IdentityFile none
+    Port 22
+
+Host quoted
+    IdentityFile "~/.ssh/my key"
+
+Host=eq
+    Port=2022
+    User = root
+
+Host bad-port
+    Port 99999
+
+Host *.example.com !secret.example.com
+    User wildcard
+
+Match host web1
+    User from-match
+
+Host *
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30

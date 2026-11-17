@@ -1,0 +1,26 @@
+# Test SSH servers: user "tester", password "tester-pass" (also for sudo).
+x-ssh: &ssh
+  image: lscr.io/linuxserver/openssh-server:latest
+  environment:
+    PUID: "1000"
+    PGID: "1000"
+    TZ: Etc/UTC
+    USER_NAME: tester
+    USER_PASSWORD: tester-pass
+    PASSWORD_ACCESS: "true"
+    SUDO_ACCESS: "true"
+  restart: "no"
+
+services:
+  ssh1:
+    <<: *ssh
+    hostname: ssh1
+    ports: ["127.0.0.1:2221:2222"]
+  ssh2:
+    <<: *ssh
+    hostname: ssh2
+    ports: ["127.0.0.1:2222:2222"]
+  ssh3:
+    <<: *ssh
+    hostname: ssh3
+    ports: ["127.0.0.1:2223:2222"]

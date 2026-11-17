@@ -1,0 +1,8 @@
+[remmina]
+name=db con\sespacios
+group=Clientes/ACME
+protocol=SSH
+server=[fe80::10]:22
+username=postgres
+password=.
+ssh_auth=0
