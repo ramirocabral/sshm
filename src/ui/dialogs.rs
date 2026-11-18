@@ -303,7 +303,7 @@ pub fn help_entries(app: &App) -> Vec<HelpLine> {
         row("h/l ←→".into(), "collapse/expand folder"),
         row("Enter".into(), "connect (or open every marked host in a grid)"),
         row("Space".into(), "mark host (on a folder: marks all)"),
-        row("v / V".into(), "select a range with j/k: Enter opens it in a grid, o in this tab, Space marks it"),
+        row("v / V".into(), "select a range with j/k: Enter opens it in a grid, o in this tab, Space marks it, d deletes it"),
         row("o".into(), "open in the current tab"),
         row("/".into(), "search (fuzzy: name, host, user or tag); Ctrl+j/k moves while typing"),
         row("n / e / c / d".into(), "new / edit / duplicate / delete host"),

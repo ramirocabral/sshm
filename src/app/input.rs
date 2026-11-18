@@ -580,6 +580,12 @@ impl App {
                     self.sidebar.visual = None;
                     self.sidebar.toggle_marks(ids);
                 }
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    let items = self.sidebar.items(&self.store);
+                    let ids = self.sidebar.visual_hosts(&self.store, &items);
+                    self.sidebar.visual = None;
+                    self.confirm_delete_hosts(ids);
+                }
                 KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') | KeyCode::Char('q') => self.sidebar.visual = None,
                 _ => {}
             }
@@ -616,12 +622,8 @@ impl App {
                 }
             }
             KeyCode::Char('d') | KeyCode::Delete => {
-                if let Some(h) = self.selected_host().and_then(|id| self.store.get(&id).cloned()) {
-                    self.push_dialog(Dialog::Confirm(ConfirmDialog {
-                        title: "Delete host".into(),
-                        body: format!("Delete {} ({})? Its passwords are removed from the vault too.", h.path(), h.display_target()),
-                        action: Some(ConfirmAction::DeleteHost(h.id)),
-                    }));
+                if let Some(id) = self.selected_host() {
+                    self.confirm_delete_hosts(vec![id]);
                 }
             }
             KeyCode::Char('s') => {
@@ -651,6 +653,22 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn confirm_delete_hosts(&mut self, ids: Vec<String>) {
+        let hosts: Vec<&Host> = ids.iter().filter_map(|id| self.store.get(id)).collect();
+        let (title, body) = match hosts.as_slice() {
+            [] => return self.info("No hosts in the selection"),
+            [h] => ("Delete host", format!("Delete {} ({})? Its passwords are removed from the vault too.", h.path(), h.display_target())),
+            hs => {
+                let names: Vec<String> = hs.iter().take(5).map(|h| h.path()).collect();
+                let more = if hs.len() > 5 { ", …" } else { "" };
+                let body = format!("Delete {} hosts ({}{more})? Their passwords are removed from the vault too.", hs.len(), names.join(", "));
+                ("Delete hosts", body)
+            }
+        };
+        let ids = hosts.iter().map(|h| h.id.clone()).collect();
+        self.push_dialog(Dialog::Confirm(ConfirmDialog { title: title.into(), body, action: Some(ConfirmAction::DeleteHosts(ids)) }));
     }
 
     /// Cursor movement, shared by the normal and the visual mode of the host list.
@@ -1054,17 +1072,19 @@ impl App {
             ConfirmAction::HostKey(reply) => {
                 let _ = reply.send(Some("yes".into()));
             }
-            ConfirmAction::DeleteHost(id) => {
-                self.store.remove(&id);
+            ConfirmAction::DeleteHosts(ids) => {
+                for id in &ids {
+                    self.store.remove(id);
+                    self.sidebar.marked.remove(id);
+                }
                 self.persist_hosts();
                 if self.vault.is_unlocked() {
-                    self.vault.remove(&id);
+                    ids.iter().for_each(|id| self.vault.remove(id));
                     if let Err(e) = self.vault.save() {
                         self.error(format!("Could not save the vault: {e:#}"));
                     }
                 }
-                self.sidebar.marked.remove(&id);
-                self.info("Host deleted");
+                self.info(if ids.len() == 1 { "Host deleted".to_string() } else { format!("{} hosts deleted", ids.len()) });
             }
             ConfirmAction::ClosePane(id) => self.close_pane(id),
             ConfirmAction::Quit => self.quit = true,

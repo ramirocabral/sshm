@@ -87,7 +87,7 @@ Keys in the host list:
 | `Enter` | connect, or open every marked host in a grid |
 | `o` | open in the current tab |
 | `Space` | mark a host (on a folder: mark all its hosts) |
-| `v` / `V` | visual mode: `j`/`k` extend the range, `Enter` opens it in a grid, `o` in the current tab, `Space` marks it, `Esc` cancels |
+| `v` / `V` | visual mode: `j`/`k` extend the range, `Enter` opens it in a grid, `o` in the current tab, `Space` marks it, `d` deletes it, `Esc` cancels |
 | `/` | fuzzy search |
 | `n`, `e`, `c`, `d` | new, edit, duplicate, delete |
 | `s` | SFTP |

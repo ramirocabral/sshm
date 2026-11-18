@@ -351,7 +351,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ));
     } else if sidebar_visual {
         spans.push(Span::styled(
-            "j/k extend · Enter open in a grid · o add to tab · Space mark · Esc cancel",
+            "j/k extend · Enter open in a grid · o add to tab · Space mark · d delete · Esc cancel",
             Style::default().fg(Color::Gray),
         ));
     } else if app.focus == Focus::Sidebar {

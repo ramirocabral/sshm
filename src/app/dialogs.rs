@@ -65,7 +65,7 @@ pub struct AskPassDialog {
 
 pub enum ConfirmAction {
     HostKey(oneshot::Sender<Option<String>>),
-    DeleteHost(String),
+    DeleteHosts(Vec<String>),
     ClosePane(PaneId),
     Quit,
     SftpDelete { tab: u64, remote: bool, paths: Vec<String> },
