@@ -30,7 +30,7 @@ docker compose -f dev/docker-compose.yml -p sshm-dev up -d   # ssh test servers 
 ```
 
 Interactive testing without a real terminal: run the binary inside a private tmux server and
-drive it with `send-keys` / `capture-pane` (`tmux -L sshmtest ...`). Point `XDG_CONFIG_HOME`,
+drive it with `send-keys` / `capture-pane` (`tmux -L sshmtest -f /dev/null ...`: a user tmux.conf can leave the pane in view-mode and swallow the keys). Point `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME` and `XDG_STATE_HOME` at a scratch dir so the real hosts/vault are untouched,
 and give test hosts `-o UserKnownHostsFile=<scratch>` in `ssh_args`. Mouse events can be
 injected as raw SGR sequences with `send-keys -l`.
