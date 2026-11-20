@@ -4,7 +4,7 @@ use super::form::{Choice, Field, FieldKind, Form, Mode};
 use super::widgets::TextInput;
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
-use crate::store::hosts::{Host, SecretSource};
+use crate::store::hosts::{Host, SecretSource, normalize_folder};
 use crate::term::pane::PaneId;
 
 pub enum Dialog {
@@ -83,6 +83,7 @@ pub enum InputAction {
     SftpRename { tab: u64, remote: bool, from: String },
     SftpGoto { tab: u64, remote: bool },
     RenameTab { tab: u64 },
+    RenameFolder { from: String },
 }
 
 pub struct InputDialog {
@@ -448,7 +449,7 @@ impl HostForm {
         };
         let opt = |id: &str| Some(f.value(id)).filter(|v| !v.is_empty());
         let name = f.value("name");
-        let folder = f.value("folder").split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
+        let folder = normalize_folder(&f.value("folder"));
         Ok(Host {
             id: self.id.clone(),
             name: if name.is_empty() { host.clone() } else { name },

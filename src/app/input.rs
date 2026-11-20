@@ -15,7 +15,7 @@ use super::widgets::TextInput;
 use super::{App, Focus, TabKind};
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
-use crate::store::hosts::Host;
+use crate::store::hosts::{Host, normalize_folder};
 use crate::term::pane::PaneId;
 use crate::term::{keys, mouse};
 
@@ -606,11 +606,15 @@ impl App {
                 self.sidebar.search = Some(TextInput::new(self.sidebar.query.clone()));
             }
             KeyCode::Char('n') => self.open_host_form(None),
-            KeyCode::Char('e') => {
-                if let Some(h) = self.selected_host() {
-                    self.open_host_form(Some(h));
-                }
-            }
+            KeyCode::Char('e') => match self.sidebar.items(&self.store).get(self.sidebar.selected).cloned() {
+                Some(Item::Host { id, .. }) => self.open_host_form(Some(id)),
+                Some(Item::Folder { path, .. }) => self.push_dialog(Dialog::Input(InputDialog {
+                    title: "Rename folder (a/b moves it into a)".into(),
+                    input: TextInput::new(path.clone()),
+                    action: Some(InputAction::RenameFolder { from: path }),
+                })),
+                None => {}
+            },
             KeyCode::Char('c') => {
                 if let Some(h) = self.selected_host().and_then(|id| self.store.get(&id).cloned()) {
                     let mut copy = h.clone();
@@ -1103,7 +1107,22 @@ impl App {
                     t.title = Some(value).filter(|v| !v.is_empty());
                 }
             }
+            InputAction::RenameFolder { from } => self.rename_folder(&from, &value),
         }
+    }
+
+    fn rename_folder(&mut self, from: &str, to: &str) {
+        let to = normalize_folder(to);
+        if to.is_empty() {
+            return self.error("The folder name cannot be empty");
+        }
+        if to == from {
+            return;
+        }
+        let moved = self.store.rename_folder(from, &to);
+        self.persist_hosts();
+        self.sidebar.folder_renamed(&self.store, from, &to);
+        self.info(format!("Folder {from} renamed to {to} ({moved} hosts)"));
     }
 
     pub fn run_command(&mut self, cmd: Command) {

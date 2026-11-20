@@ -156,6 +156,16 @@ impl Host {
     }
 }
 
+/// Trims every segment of a folder path and drops the empty ones: " a / /b/" → "a/b".
+pub fn normalize_folder(s: &str) -> String {
+    s.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/")
+}
+
+/// When `folder` is `parent` or lies below it, the part after `parent` ("" or "/sub/…").
+pub fn subpath<'a>(folder: &'a str, parent: &str) -> Option<&'a str> {
+    folder.strip_prefix(parent).filter(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 pub fn new_id() -> String {
     use rand::RngExt;
     let mut rng = rand::rng();
@@ -221,9 +231,20 @@ impl HostStore {
 
     /// Hosts in `folder` or any of its subfolders.
     pub fn hosts_under<'a>(&'a self, folder: &'a str) -> impl Iterator<Item = &'a Host> + 'a {
-        self.hosts
-            .iter()
-            .filter(move |h| h.folder == folder || h.folder.strip_prefix(folder).is_some_and(|rest| rest.starts_with('/')))
+        self.hosts.iter().filter(move |h| subpath(&h.folder, folder).is_some())
+    }
+
+    /// Moves `from`, with its hosts and subfolders, to `to`. Returns how many hosts moved.
+    pub fn rename_folder(&mut self, from: &str, to: &str) -> usize {
+        let mut moved = 0;
+        for h in &mut self.hosts {
+            if let Some(rest) = subpath(&h.folder, from) {
+                h.folder = format!("{to}{rest}");
+                moved += 1;
+            }
+        }
+        self.sort();
+        moved
     }
 
     pub fn upsert(&mut self, host: Host) {
@@ -288,5 +309,26 @@ mod tests {
         assert_eq!(loaded.hosts, store.hosts);
         assert_eq!(loaded.folders(), vec!["clientes".to_string(), "clientes/acme".to_string()]);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn rename_folder_moves_subfolders_only() {
+        let mut store = HostStore::default();
+        for (name, folder) in [("a", "tef"), ("b", "tef/mx"), ("c", "tefmx"), ("d", "")] {
+            store.upsert(Host { name: name.into(), folder: folder.into(), host: name.into(), ..Host::default() });
+        }
+        assert_eq!(store.rename_folder("tef", "AAA"), 2);
+        let paths: Vec<String> = store.hosts.iter().map(Host::path).collect();
+        assert_eq!(paths, ["d", "AAA/a", "AAA/mx/b", "tefmx/c"]);
+
+        // Moving a folder inside itself keeps working off the old paths.
+        assert_eq!(store.rename_folder("AAA", "AAA/old"), 2);
+        assert_eq!(store.find_by_path("AAA/old/mx/b").map(|h| h.name.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn normalize_folder_trims_segments() {
+        assert_eq!(normalize_folder(" a / /b/ "), "a/b");
+        assert_eq!(normalize_folder(" / "), "");
     }
 }

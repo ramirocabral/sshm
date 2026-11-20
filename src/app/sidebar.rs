@@ -4,7 +4,7 @@ use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config as MatchConfig, Matcher, Utf32Str};
 
 use super::widgets::TextInput;
-use crate::store::hosts::HostStore;
+use crate::store::hosts::{HostStore, subpath};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
@@ -128,19 +128,38 @@ impl Sidebar {
     }
 
     pub fn select_host(&mut self, store: &HostStore, id: &str) {
-        if let Some(h) = store.get(id) {
-            let mut acc = String::new();
-            for part in h.folder.split('/').filter(|p| !p.is_empty()) {
-                if !acc.is_empty() {
-                    acc.push('/');
-                }
-                acc.push_str(part);
-                self.expanded.insert(acc.clone());
-            }
+        if let Some(folder) = store.get(id).map(|h| h.folder.clone()) {
+            self.expand_path(&folder);
         }
         let items = self.items(store);
         if let Some(idx) = items.iter().position(|i| matches!(i, Item::Host { id: hid, .. } if hid == id)) {
             self.selected = idx;
+        }
+    }
+
+    /// Follows a folder renamed from `from` to `to`: its subfolders stay expanded or collapsed
+    /// as they were, and the cursor lands on it.
+    pub fn folder_renamed(&mut self, store: &HostStore, from: &str, to: &str) {
+        let moved: Vec<String> =
+            self.expanded.iter().filter_map(|f| subpath(f, from).map(|rest| format!("{to}{rest}"))).collect();
+        self.expanded.retain(|f| subpath(f, from).is_none());
+        self.expanded.extend(moved);
+        self.expand_path(parent_of(to));
+        let items = self.items(store);
+        if let Some(idx) = items.iter().position(|i| matches!(i, Item::Folder { path, .. } if path == to)) {
+            self.selected = idx;
+        }
+    }
+
+    /// Expands `folder` and every folder above it.
+    fn expand_path(&mut self, folder: &str) {
+        let mut acc = String::new();
+        for part in folder.split('/').filter(|p| !p.is_empty()) {
+            if !acc.is_empty() {
+                acc.push('/');
+            }
+            acc.push_str(part);
+            self.expanded.insert(acc.clone());
         }
     }
 }
@@ -196,5 +215,23 @@ mod tests {
         assert!(sb.marked.contains(&store.hosts.iter().find(|h| h.name == "db1").unwrap().id));
         sb.clamp(0);
         assert_eq!((sb.selected, sb.visual), (0, Some(0)));
+    }
+
+    #[test]
+    fn folder_rename_keeps_expansion() {
+        let mut store = HostStore::default();
+        for (name, folder) in [("web1", "acme/prod"), ("lab", ""), ("x", "zeta")] {
+            store.upsert(Host { name: name.into(), folder: folder.into(), host: format!("{name}.local"), ..Host::default() });
+        }
+        let mut sb = Sidebar::default();
+        sb.items(&store);
+        sb.expanded.insert("acme/prod".into());
+
+        store.rename_folder("acme", "zeta/acme2");
+        sb.folder_renamed(&store, "acme", "zeta/acme2");
+        assert!(!sb.expanded.iter().any(|f| f.starts_with("acme")));
+        assert!(sb.expanded.contains("zeta/acme2") && sb.expanded.contains("zeta/acme2/prod"));
+        let items = sb.items(&store);
+        assert!(matches!(&items[sb.selected], Item::Folder { path, .. } if path == "zeta/acme2"));
     }
 }

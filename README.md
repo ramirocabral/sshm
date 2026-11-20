@@ -90,6 +90,7 @@ Keys in the host list:
 | `v` / `V` | visual mode: `j`/`k` extend the range, `Enter` opens it in a grid, `o` in the current tab, `Space` marks it, `d` deletes it, `Esc` cancels |
 | `/` | fuzzy search |
 | `n`, `e`, `c`, `d` | new, edit, duplicate, delete |
+| `e` on a folder | rename it; `a/b` moves it into `a` (its hosts and subfolders go along) |
 | `s` | SFTP |
 | `y` | copy `user@host` |
 | `i` / `x` | import / export |
