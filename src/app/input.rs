@@ -15,7 +15,7 @@ use super::widgets::TextInput;
 use super::{App, Focus, TabKind};
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
-use crate::store::hosts::{Host, rename_target};
+use crate::store::hosts::{Host, move_target, normalize_folder, parent_folder, rename_target};
 use crate::term::pane::PaneId;
 use crate::term::{keys, mouse};
 
@@ -62,6 +62,10 @@ impl App {
                     None
                 }
                 Dialog::Export(f) => {
+                    f.form.paste(&text);
+                    None
+                }
+                Dialog::Move(f) => {
                     f.form.paste(&text);
                     None
                 }
@@ -586,6 +590,12 @@ impl App {
                     self.sidebar.visual = None;
                     self.confirm_delete_hosts(ids);
                 }
+                KeyCode::Char('m') => {
+                    let items = self.sidebar.items(&self.store);
+                    let ids = self.sidebar.visual_hosts(&self.store, &items);
+                    self.sidebar.visual = None;
+                    self.open_move_hosts(ids);
+                }
                 KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') | KeyCode::Char('q') => self.sidebar.visual = None,
                 _ => {}
             }
@@ -609,12 +619,13 @@ impl App {
             KeyCode::Char('e') => match self.sidebar.items(&self.store).get(self.sidebar.selected).cloned() {
                 Some(Item::Host { id, .. }) => self.open_host_form(Some(id)),
                 Some(Item::Folder { path, name, .. }) => self.push_dialog(Dialog::Input(InputDialog {
-                    title: format!("Rename {path} · /a/b moves it to a/b"),
+                    title: format!("Rename folder {path}"),
                     input: TextInput::new(name),
                     action: Some(InputAction::RenameFolder { from: path }),
                 })),
                 None => {}
             },
+            KeyCode::Char('m') => self.open_move(),
             KeyCode::Char('c') => {
                 if let Some(h) = self.selected_host().and_then(|id| self.store.get(&id).cloned()) {
                     let mut copy = h.clone();
@@ -656,6 +667,70 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `m`: moves the marked hosts, or else the folder or host under the cursor.
+    fn open_move(&mut self) {
+        if !self.sidebar.marked.is_empty() {
+            let ids = self.sidebar.marked.iter().cloned().collect();
+            return self.open_move_hosts(ids);
+        }
+        match self.sidebar.items(&self.store).get(self.sidebar.selected).cloned() {
+            Some(Item::Folder { path, .. }) => {
+                let current = parent_folder(&path).to_string();
+                let form = MoveForm::new(MoveWhat::Folder(path.clone()), format!("Move folder {path}"), &current, self.store.folders());
+                self.push_dialog(Dialog::Move(form));
+            }
+            Some(Item::Host { id, .. }) => self.open_move_hosts(vec![id]),
+            None => {}
+        }
+    }
+
+    fn open_move_hosts(&mut self, ids: Vec<String>) {
+        let hosts: Vec<&Host> = self.store.hosts.iter().filter(|h| ids.contains(&h.id)).collect();
+        let (title, current) = match hosts.as_slice() {
+            [] => return self.info("No hosts in the selection"),
+            [h] => (format!("Move {}", h.path()), h.folder.clone()),
+            hs => (format!("Move {} hosts", hs.len()), hs[0].folder.clone()),
+        };
+        let ids = hosts.iter().map(|h| h.id.clone()).collect();
+        let form = MoveForm::new(MoveWhat::Hosts(ids), title, &current, self.store.folders());
+        self.push_dialog(Dialog::Move(form));
+    }
+
+    fn run_move(&mut self, mut d: MoveForm) {
+        let dest = normalize_folder(&d.form.value("dest"));
+        let place = if dest.is_empty() { "the top level".to_string() } else { dest.clone() };
+        match &d.what {
+            MoveWhat::Folder(from) => {
+                let from = from.clone();
+                let to = match move_target(&from, &dest) {
+                    Ok(to) => to,
+                    Err(e) => {
+                        d.form.error = Some(e.into());
+                        return self.dialogs.push_front(Dialog::Move(d));
+                    }
+                };
+                if to == from {
+                    return;
+                }
+                let moved = self.store.rename_folder(&from, &to);
+                self.persist_hosts();
+                self.sidebar.folder_renamed(&self.store, &from, &to);
+                self.info(format!("Folder {from} moved to {place} ({moved} hosts)"));
+            }
+            MoveWhat::Hosts(ids) => {
+                let moved = self.store.move_hosts(ids, &dest);
+                self.persist_hosts();
+                ids.iter().for_each(|id| {
+                    self.sidebar.marked.remove(id);
+                });
+                if let Some(id) = ids.first() {
+                    self.sidebar.select_host(&self.store, id);
+                }
+                self.info(if moved == 1 { format!("Host moved to {place}") } else { format!("{moved} hosts moved to {place}") });
+            }
         }
     }
 
@@ -1050,6 +1125,11 @@ impl App {
                     keep(self, Dialog::Export(d));
                 }
             },
+            Dialog::Move(mut d) => match d.form.handle_key(&key) {
+                FormEvent::Cancel => {}
+                FormEvent::Submit => self.run_move(d),
+                _ => keep(self, Dialog::Move(d)),
+            },
         }
     }
 
@@ -1112,8 +1192,9 @@ impl App {
     }
 
     fn rename_folder(&mut self, from: &str, input: &str) {
-        let Some(to) = rename_target(from, input) else {
-            return self.error("The folder name cannot be empty");
+        let to = match rename_target(from, input) {
+            Ok(to) => to,
+            Err(e) => return self.error(e),
         };
         if to == from {
             return;
@@ -1321,6 +1402,7 @@ impl App {
                 }
                 ev
             }
+            Some(Dialog::Move(d)) => act(&mut d.form),
             Some(Dialog::Help(h)) => {
                 match m.kind {
                     MouseEventKind::ScrollUp => h.scroll = h.scroll.saturating_sub(3),
@@ -1336,6 +1418,7 @@ impl App {
                 (Some(Dialog::HostForm(d)), FormEvent::Submit) => self.save_host_form(d),
                 (Some(Dialog::Import(d)), FormEvent::Submit) => self.run_import(d),
                 (Some(Dialog::Export(d)), FormEvent::Submit) => self.run_export(d),
+                (Some(Dialog::Move(d)), FormEvent::Submit) => self.run_move(d),
                 _ => {}
             }
         }

@@ -4,7 +4,7 @@ use super::form::{Choice, Field, FieldKind, Form, Mode};
 use super::widgets::TextInput;
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
-use crate::store::hosts::{Host, SecretSource, normalize_folder};
+use crate::store::hosts::{Host, SecretSource, normalize_folder, subpath};
 use crate::term::pane::PaneId;
 
 pub enum Dialog {
@@ -18,6 +18,7 @@ pub enum Dialog {
     Palette(PaletteDialog),
     Import(ImportForm),
     Export(ExportForm),
+    Move(MoveForm),
 }
 
 /// What to do once a secret is available.
@@ -221,6 +222,32 @@ impl ImportForm {
         };
         self.form.field_mut("passphrase").hint = hint.into();
         self.form.set_visible("passphrase", !hint.is_empty());
+    }
+}
+
+pub enum MoveWhat {
+    Folder(String),
+    Hosts(Vec<String>),
+}
+
+pub struct MoveForm {
+    pub form: Form,
+    pub what: MoveWhat,
+}
+
+impl MoveForm {
+    /// `current` is the destination it starts on; `folders` are offered as destinations, except
+    /// the folder being moved and the ones below it.
+    pub fn new(what: MoveWhat, title: String, current: &str, folders: Vec<String>) -> Self {
+        let inside = |f: &str| matches!(&what, MoveWhat::Folder(moving) if subpath(f, moving).is_some());
+        let mut dests: Vec<Choice> =
+            folders.into_iter().filter(|f| !inside(f)).map(|f| Choice::new(f.clone(), f, "")).collect();
+        dests.insert(0, Choice::new("", "(top level)", "no folder"));
+        let fields = vec![
+            Field::combo("dest", "Move to", current, dests)
+                .hint("Press Enter to pick a folder, or type a new one (a/b for subfolders)"),
+        ];
+        MoveForm { form: Form::new(title, "Move", fields), what }
     }
 }
 

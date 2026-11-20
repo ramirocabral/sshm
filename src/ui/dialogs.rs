@@ -138,6 +138,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         Dialog::HostForm(d) => draw_form(f, app, &d.form, area, 96),
         Dialog::Import(d) => draw_form(f, app, &d.form, area, 90),
         Dialog::Export(d) => draw_form(f, app, &d.form, area, 90),
+        Dialog::Move(d) => draw_form(f, app, &d.form, area, 80),
         Dialog::Help(h) => {
             let rect = centered(area, 104, area.height.saturating_sub(4));
             let inner = frame(f, rect, "Help", ACCENT);
@@ -303,11 +304,12 @@ pub fn help_entries(app: &App) -> Vec<HelpLine> {
         row("h/l ←→".into(), "collapse/expand folder"),
         row("Enter".into(), "connect (or open every marked host in a grid)"),
         row("Space".into(), "mark host (on a folder: marks all)"),
-        row("v / V".into(), "select a range with j/k: Enter opens it in a grid, o in this tab, Space marks it, d deletes it"),
+        row("v / V".into(), "select a range with j/k: Enter opens it in a grid, o in this tab, Space marks it, m moves it, d deletes it"),
         row("o".into(), "open in the current tab"),
         row("/".into(), "search (fuzzy: name, host, user or tag); Ctrl+j/k moves while typing"),
         row("n / e / c / d".into(), "new / edit / duplicate / delete host"),
-        row("e on a folder".into(), "rename it in place; /a/b moves it to a/b (hosts and subfolders go along)"),
+        row("e on a folder".into(), "rename it"),
+        row("m".into(), "move the marked hosts, or the folder/host under the cursor, to another folder"),
         row("s".into(), "SFTP"),
         row("y".into(), "copy user@host"),
         row("i / x".into(), "import / export"),

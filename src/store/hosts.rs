@@ -161,19 +161,35 @@ pub fn normalize_folder(s: &str) -> String {
     s.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/")
 }
 
-/// Where `input` from the rename dialog takes `folder`: a name stays in the same parent
-/// ("x/y" nests below it), a leading '/' gives the full path from the top. None when empty.
-pub fn rename_target(folder: &str, input: &str) -> Option<String> {
-    if normalize_folder(input).is_empty() {
-        return None;
+/// The folder that contains `folder` ("" at the top level).
+pub fn parent_folder(folder: &str) -> &str {
+    folder.rsplit_once('/').map(|(p, _)| p).unwrap_or("")
+}
+
+fn join_folder(parent: &str, name: &str) -> String {
+    if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") }
+}
+
+/// The path `folder` gets when renamed to `name` in place, or why `name` is not valid.
+pub fn rename_target(folder: &str, name: &str) -> Result<String, &'static str> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("The folder name cannot be empty");
     }
-    Some(match input.trim_start().strip_prefix('/') {
-        Some(full) => normalize_folder(full),
-        None => {
-            let parent = folder.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-            normalize_folder(&format!("{parent}/{input}"))
-        }
-    })
+    if name.contains('/') {
+        return Err("A folder name cannot contain '/': press m to move the folder");
+    }
+    Ok(join_folder(parent_folder(folder), name))
+}
+
+/// The path `folder` gets when moved into `dest` (it keeps its name), or why it cannot go there.
+pub fn move_target(folder: &str, dest: &str) -> Result<String, &'static str> {
+    let dest = normalize_folder(dest);
+    if subpath(&dest, folder).is_some() {
+        return Err("A folder cannot be moved inside itself");
+    }
+    let name = folder.rsplit_once('/').map(|(_, n)| n).unwrap_or(folder);
+    Ok(join_folder(&dest, name))
 }
 
 /// When `folder` is `parent` or lies below it, the part after `parent` ("" or "/sub/…").
@@ -262,6 +278,17 @@ impl HostStore {
         moved
     }
 
+    /// Puts the hosts with these ids in `folder`. Returns how many it found.
+    pub fn move_hosts(&mut self, ids: &[String], folder: &str) -> usize {
+        let mut moved = 0;
+        for h in self.hosts.iter_mut().filter(|h| ids.contains(&h.id)) {
+            h.folder = folder.to_string();
+            moved += 1;
+        }
+        self.sort();
+        moved
+    }
+
     pub fn upsert(&mut self, host: Host) {
         if let Some(existing) = self.get_mut(&host.id) {
             *existing = host;
@@ -343,14 +370,33 @@ mod tests {
 
     #[test]
     fn rename_target_stays_in_parent() {
-        let t = |folder, input| rename_target(folder, input);
-        assert_eq!(t("MAT/AT&T Datacom", "AT&T").as_deref(), Some("MAT/AT&T"));
-        assert_eq!(t("MAT/AT&T Datacom", " x / y ").as_deref(), Some("MAT/x/y"));
-        assert_eq!(t("Telefonica", "AAA").as_deref(), Some("AAA"));
-        assert_eq!(t("MAT/AT&T", " /AT&T").as_deref(), Some("AT&T"));
-        assert_eq!(t("AT&T", "/MAT/AT&T").as_deref(), Some("MAT/AT&T"));
-        assert_eq!(t("MAT/x", " "), None);
-        assert_eq!(t("MAT/x", "/"), None);
+        assert_eq!(rename_target("MAT/AT&T Datacom", " AT&T "), Ok("MAT/AT&T".into()));
+        assert_eq!(rename_target("Telefonica", "AAA"), Ok("AAA".into()));
+        assert!(rename_target("MAT/x", " ").is_err());
+        assert!(rename_target("MAT/x", "Lab/x").is_err());
+    }
+
+    #[test]
+    fn move_target_keeps_the_name() {
+        assert_eq!(move_target("MAT/Lab/AT&T", "MAT"), Ok("MAT/AT&T".into()));
+        assert_eq!(move_target("MAT/AT&T", ""), Ok("AT&T".into()));
+        assert_eq!(move_target("AT&T", " Lab / x "), Ok("Lab/x/AT&T".into()));
+        // Into a sibling that only shares the prefix is fine; into itself or below is not.
+        assert_eq!(move_target("MAT", "MATx"), Ok("MATx/MAT".into()));
+        assert!(move_target("MAT", "MAT").is_err());
+        assert!(move_target("MAT", "MAT/AT&T").is_err());
+    }
+
+    #[test]
+    fn move_hosts_sets_the_folder() {
+        let mut store = HostStore::default();
+        for (name, folder) in [("a", "x"), ("b", "y"), ("c", "x")] {
+            store.upsert(Host { name: name.into(), folder: folder.into(), host: name.into(), ..Host::default() });
+        }
+        let ids: Vec<String> = store.hosts.iter().filter(|h| h.name != "b").map(|h| h.id.clone()).collect();
+        assert_eq!(store.move_hosts(&ids, "z/w"), 2);
+        let paths: Vec<String> = store.hosts.iter().map(Host::path).collect();
+        assert_eq!(paths, ["y/b", "z/w/a", "z/w/c"]);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config as MatchConfig, Matcher, Utf32Str};
 
 use super::widgets::TextInput;
-use crate::store::hosts::{HostStore, subpath};
+use crate::store::hosts::{HostStore, parent_folder as parent_of, subpath};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
@@ -162,10 +162,6 @@ impl Sidebar {
             self.expanded.insert(acc.clone());
         }
     }
-}
-
-fn parent_of(path: &str) -> &str {
-    path.rsplit_once('/').map(|(p, _)| p).unwrap_or("")
 }
 
 #[cfg(test)]
