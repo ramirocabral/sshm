@@ -67,8 +67,10 @@ injected as raw SGR sequences with `send-keys -l`.
   the key closes it.
 - **Secrets** (`secrets/`): `Vault` is a JSON map host-id → {password, root_password,
   passphrase} encrypted with age scrypt (work factor 2^17). `SecretSource` per host is a
-  string in hosts.toml: `vault`, `none`, `bw:`, `rbw:`, `op://`, `cmd:`. External sources run
-  in `spawn_blocking`.
+  string in hosts.toml: `keyring`, `vault`, `none`, `bw:`, `rbw:`, `op://`, `cmd:`. External
+  sources run in `spawn_blocking`. `keyring` (`secrets/keyring.rs`) shells out to libsecret's
+  `secret-tool` instead of linking D-Bus; `save_secrets` routes each secret to the keyring or
+  the vault by the host's source, and keyring writes report back through `AppEvent::Notice`.
 - **Import/export** (`import/`): `import()` → `ImportReport`, `merge()` into the store (does
   not save; callers save hosts.toml and the vault), `export()`. Third-party password
   decryption (MobaXterm AES-CFB8, Ásbrú Blowfish/Crypt::CBC, Remmina 3DES) is verified

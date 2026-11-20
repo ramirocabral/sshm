@@ -61,6 +61,14 @@ rust_pkg() {
     esac
 }
 
+libsecret_pkg() {
+    case "$(pkg_manager)" in
+        apt-get | zypper) echo libsecret-tools ;;
+        emerge) echo app-crypt/libsecret ;;
+        *) echo libsecret ;;
+    esac
+}
+
 openssh_pkg() {
     case "$(pkg_manager)" in
         pacman | apk | xbps-install | zypper) echo openssh ;;
@@ -104,6 +112,11 @@ check_deps() {
     if ! have wl-copy && ! have xclip && ! have xsel; then
         say "note: no wl-copy, xclip or xsel found. Copying still works through OSC 52 in terminals"
         say "      that support it; for the rest install one of them (optional)."
+    fi
+    if ! have secret-tool; then
+        say "note: secret-tool not found. It lets hosts keep their passwords in the desktop keyring"
+        say "      (GNOME Keyring, KWallet…); without it they go to sshm's vault. Optional:"
+        say "      $(hint "$(libsecret_pkg)")"
     fi
     say "note: bw, rbw and op are optional; only needed for hosts that take passwords from"
     say "      Bitwarden or 1Password."

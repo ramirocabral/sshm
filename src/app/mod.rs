@@ -31,7 +31,10 @@ pub enum AppEvent {
     Input(CEvent),
     Pane(PaneId, PaneNotify),
     AskPass(AskPassRequest),
-    SecretFetched { req: u64, result: Result<String, String> },
+    /// Ok(None): the source has nothing stored for the host.
+    SecretFetched { req: u64, result: Result<Option<String>, String> },
+    /// Outcome of a background job worth a toast.
+    Notice(Result<String, String>),
     Sftp(u64, sftp::SftpEvent),
     Tick,
 }
@@ -217,7 +220,7 @@ impl App {
             AppEvent::SecretFetched { req, result } => {
                 if let Some(purpose) = self.pending_secrets.remove(&req) {
                     match result {
-                        Ok(v) => self.fulfill(purpose, Some(v)),
+                        Ok(v) => self.fulfill(purpose, v),
                         Err(e) => {
                             self.error(e);
                             self.fulfill(purpose, None);
@@ -225,6 +228,8 @@ impl App {
                     }
                 }
             }
+            AppEvent::Notice(Ok(msg)) => self.info(msg),
+            AppEvent::Notice(Err(e)) => self.error(e),
             AppEvent::Sftp(tab, ev) => self.handle_sftp_event(tab, ev),
             AppEvent::Tick => {
                 if self.toast.as_ref().is_some_and(|t| t.1.elapsed() > Duration::from_secs(4)) {
@@ -562,13 +567,22 @@ impl App {
                     self.push_dialog(Dialog::Unlock(UnlockDialog::new(false, then)));
                 }
             }
+            SecretSource::Keyring => {
+                let req = self.next_id();
+                self.pending_secrets.insert(req, purpose);
+                let (tx, host_id) = (self.tx.clone(), host_id.to_string());
+                tokio::task::spawn_blocking(move || {
+                    let result = secrets::keyring::get(&host_id, kind).map_err(|e| format!("{e:#}"));
+                    let _ = tx.send(AppEvent::SecretFetched { req, result });
+                });
+            }
             external => {
                 let req = self.next_id();
                 self.pending_secrets.insert(req, purpose);
                 self.info(format!("Fetching from {}…", external.label()));
                 let tx = self.tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let result = secrets::fetch_external(&external).map_err(|e| format!("{e:#}"));
+                    let result = secrets::fetch_external(&external).map(Some).map_err(|e| format!("{e:#}"));
                     let _ = tx.send(AppEvent::SecretFetched { req, result });
                 });
             }
@@ -659,7 +673,13 @@ impl App {
         }
     }
 
+    /// Stores (Some) or deletes (None) secrets where the host keeps them: the system keyring
+    /// for keyring sources, the vault for everything else.
     pub fn save_secrets(&mut self, host_id: &str, secrets: Vec<(SecretKind, Option<String>)>) {
+        let (keyring, secrets): (Vec<_>, Vec<_>) = secrets.into_iter().partition(|(kind, _)| self.uses_keyring(host_id, *kind));
+        if !keyring.is_empty() {
+            self.save_to_keyring(host_id, keyring);
+        }
         if secrets.is_empty() {
             return;
         }
@@ -676,6 +696,59 @@ impl App {
             Ok(()) => self.info("Password saved to the vault"),
             Err(e) => self.error(format!("Could not save the vault: {e:#}")),
         }
+    }
+
+    fn uses_keyring(&self, host_id: &str, kind: SecretKind) -> bool {
+        self.store.get(host_id).is_some_and(|h| match kind {
+            SecretKind::Password => h.password == SecretSource::Keyring,
+            SecretKind::RootPassword => h.root_password == SecretSource::Keyring,
+            SecretKind::Passphrase => false,
+        })
+    }
+
+    fn save_to_keyring(&mut self, host_id: &str, secrets: Vec<(SecretKind, Option<String>)>) {
+        let path = self.store.get(host_id).map(|h| h.path()).unwrap_or_default();
+        let (tx, host_id) = (self.tx.clone(), host_id.to_string());
+        tokio::task::spawn_blocking(move || {
+            let stored = secrets.iter().any(|(_, v)| v.is_some());
+            let result = secrets
+                .into_iter()
+                .try_for_each(|(kind, value)| match value {
+                    Some(v) => {
+                        let what = if kind == SecretKind::RootPassword { "root password" } else { "password" };
+                        secrets::keyring::set(&host_id, kind, &format!("sshm: {path} ({what})"), &v)
+                    }
+                    None => secrets::keyring::clear(&host_id, kind),
+                })
+                .map(|()| if stored { "Password saved to the keyring" } else { "Password removed from the keyring" }.to_string())
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(AppEvent::Notice(result));
+        });
+    }
+
+    /// Removes what deleted hosts kept in the system keyring.
+    pub fn forget_keyring_secrets(&self, hosts: Vec<crate::store::hosts::Host>) {
+        let jobs: Vec<(String, SecretKind)> = hosts
+            .iter()
+            .flat_map(|h| {
+                [(&h.password, SecretKind::Password), (&h.root_password, SecretKind::RootPassword)]
+                    .into_iter()
+                    .filter(|(src, _)| **src == SecretSource::Keyring)
+                    .map(|(_, kind)| (h.id.clone(), kind))
+            })
+            .collect();
+        if jobs.is_empty() {
+            return;
+        }
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            for (id, kind) in jobs {
+                if let Err(e) = secrets::keyring::clear(&id, kind) {
+                    let _ = tx.send(AppEvent::Notice(Err(format!("{e:#}"))));
+                    return;
+                }
+            }
+        });
     }
 
     pub fn run_after_unlock(&mut self, then: AfterUnlock) {

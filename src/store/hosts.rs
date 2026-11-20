@@ -15,6 +15,8 @@ pub enum SecretSource {
     None,
     #[default]
     Vault,
+    /// The desktop keyring (Secret Service), through secret-tool.
+    Keyring,
     Bitwarden { item: String },
     Rbw { item: String },
     OnePassword { reference: String },
@@ -30,6 +32,7 @@ impl SecretSource {
         match self {
             SecretSource::None => "none",
             SecretSource::Vault => "vault",
+            SecretSource::Keyring => "system keyring",
             SecretSource::Bitwarden { .. } => "bitwarden (bw)",
             SecretSource::Rbw { .. } => "bitwarden (rbw)",
             SecretSource::OnePassword { .. } => "1password",
@@ -43,6 +46,7 @@ impl fmt::Display for SecretSource {
         match self {
             SecretSource::None => write!(f, "none"),
             SecretSource::Vault => write!(f, "vault"),
+            SecretSource::Keyring => write!(f, "keyring"),
             SecretSource::Bitwarden { item } => write!(f, "bw:{item}"),
             SecretSource::Rbw { item } => write!(f, "rbw:{item}"),
             SecretSource::OnePassword { reference } => write!(f, "{reference}"),
@@ -59,6 +63,7 @@ impl FromStr for SecretSource {
         Ok(match s {
             "" | "none" => SecretSource::None,
             "vault" => SecretSource::Vault,
+            "keyring" => SecretSource::Keyring,
             _ if s.starts_with("op://") => SecretSource::OnePassword { reference: s.to_string() },
             _ => {
                 if let Some(item) = s.strip_prefix("bw:") {
@@ -69,7 +74,7 @@ impl FromStr for SecretSource {
                     SecretSource::Command { command: command.trim().to_string() }
                 } else {
                     return Err(format!(
-                        "invalid secret source: {s:?} (use none, vault, bw:<item>, rbw:<item>, op://… or cmd:<command>)"
+                        "invalid secret source: {s:?} (use none, vault, keyring, bw:<item>, rbw:<item>, op://… or cmd:<command>)"
                     ));
                 }
             }
@@ -325,7 +330,7 @@ mod tests {
 
     #[test]
     fn secret_source_roundtrip() {
-        for s in ["none", "vault", "bw:srv-01", "rbw:srv 02", "op://Infra/srv/password", "cmd:pass show ssh/x"] {
+        for s in ["none", "vault", "keyring", "bw:srv-01", "rbw:srv 02", "op://Infra/srv/password", "cmd:pass show ssh/x"] {
             let parsed: SecretSource = s.parse().unwrap();
             assert_eq!(parsed.to_string(), s);
         }

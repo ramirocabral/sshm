@@ -341,6 +341,7 @@ pub struct HostForm {
 
 fn source_choices() -> Vec<Choice> {
     vec![
+        Choice::new("keyring", "System keyring", "GNOME Keyring, KWallet, KeePassXC… (secret-tool)"),
         Choice::new("vault", "Saved in sshm", "stored encrypted in sshm's vault"),
         Choice::new("none", "Not saved", "keys only, or type it when asked"),
         Choice::new("bw", "Bitwarden (bw)", "official Bitwarden CLI, needs BW_SESSION"),
@@ -353,6 +354,7 @@ fn source_choices() -> Vec<Choice> {
 fn split_source(s: &SecretSource) -> (&'static str, String) {
     match s {
         SecretSource::Vault => ("vault", String::new()),
+        SecretSource::Keyring => ("keyring", String::new()),
         SecretSource::None => ("none", String::new()),
         SecretSource::Bitwarden { item } => ("bw", item.clone()),
         SecretSource::Rbw { item } => ("rbw", item.clone()),
@@ -361,10 +363,10 @@ fn split_source(s: &SecretSource) -> (&'static str, String) {
     }
 }
 
-/// Field ids for one password block: (source, saved value, bitwarden item, 1password ref, command).
-type SourceIds = (&'static str, &'static str, &'static str, &'static str, &'static str);
-const PW: SourceIds = ("pw_source", "pw_vault", "pw_item", "pw_ref", "pw_cmd");
-const ROOT: SourceIds = ("root_source", "root_vault", "root_item", "root_ref", "root_cmd");
+/// Field ids for one password block: (source, vault value, keyring value, bitwarden item, 1password ref, command).
+type SourceIds = (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str);
+const PW: SourceIds = ("pw_source", "pw_vault", "pw_keyring", "pw_item", "pw_ref", "pw_cmd");
+const ROOT: SourceIds = ("root_source", "root_vault", "root_keyring", "root_item", "root_ref", "root_cmd");
 
 impl HostForm {
     pub fn new(host: &Host, editing: bool, ctx: HostFormContext) -> Self {
@@ -397,12 +399,17 @@ impl HostForm {
             (PW, "Password", pw_kind, &pw_value, ctx.saved_password, "the login password; also used for sudo"),
             (ROOT, "Root password", root_kind, &root_value, ctx.saved_root, "for su - (leader+P types it)"),
         ] {
-            let (src, vault, item, reference, cmd) = ids;
+            let (src, vault, keyring, item, reference, cmd) = ids;
             fields.push(Field::select(src, label, source_choices(), kind).hint(format!("Where {what} comes from")));
             fields.push(
                 Field::secret(vault, "  Saved password", stored)
                     .placeholder(if ctx.vault_locked { "vault locked · leave empty to keep the current one" } else { "" })
                     .hint("Stored encrypted in the vault"),
+            );
+            fields.push(
+                Field::secret(keyring, "  Saved password", false)
+                    .placeholder(if editing { "leave empty to keep the current one" } else { "" })
+                    .hint("Stored in the system keyring; type it to replace the saved one"),
             );
             fields.push(
                 Field::text(item, "  Bitwarden item", value_for(kind, &["bw", "rbw"], value))
@@ -447,9 +454,10 @@ impl HostForm {
     }
 
     fn sync(&mut self) {
-        for (src, vault, item, reference, cmd) in [PW, ROOT] {
+        for (src, vault, keyring, item, reference, cmd) in [PW, ROOT] {
             let kind = self.form.value(src);
             self.form.set_visible(vault, kind == "vault");
+            self.form.set_visible(keyring, kind == "keyring");
             self.form.set_visible(item, kind == "bw" || kind == "rbw");
             self.form.set_visible(reference, kind == "op");
             self.form.set_visible(cmd, kind == "cmd");
@@ -457,9 +465,10 @@ impl HostForm {
     }
 
     fn source(&self, ids: SourceIds, what: &str) -> Result<SecretSource, String> {
-        let (src, _, item, reference, cmd) = ids;
+        let (src, _, _, item, reference, cmd) = ids;
         Ok(match self.form.value(src).as_str() {
             "none" => SecretSource::None,
+            "keyring" => SecretSource::Keyring,
             "bw" | "rbw" => {
                 let item = self.form.value(item);
                 if item.is_empty() {
@@ -517,10 +526,16 @@ impl HostForm {
         })
     }
 
-    /// Vault changes typed in the form: Some(value) stores, None deletes; untouched fields are left out.
+    /// Passwords typed for the chosen source (vault or keyring): Some(value) stores, None
+    /// deletes; untouched fields are left out.
     pub fn secret_changes(&self) -> Vec<(SecretKind, Option<String>)> {
         let mut out = Vec::new();
-        for (id, kind) in [(PW.1, SecretKind::Password), (ROOT.1, SecretKind::RootPassword)] {
+        for (ids, kind) in [(PW, SecretKind::Password), (ROOT, SecretKind::RootPassword)] {
+            let id = match self.form.value(ids.0).as_str() {
+                "vault" => ids.1,
+                "keyring" => ids.2,
+                _ => continue,
+            };
             if let FieldKind::Secret { input, cleared, .. } = &self.form.field(id).kind {
                 if !input.value.is_empty() {
                     out.push((kind, Some(input.value.clone())));

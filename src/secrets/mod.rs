@@ -1,3 +1,4 @@
+pub mod keyring;
 pub mod vault;
 
 use std::process::{Command, Stdio};
@@ -14,7 +15,7 @@ pub fn fetch_external(source: &SecretSource) -> Result<String> {
         SecretSource::Rbw { item } => ("rbw", vec!["get".into(), item.clone()]),
         SecretSource::OnePassword { reference } => ("op", vec!["read".into(), reference.clone()]),
         SecretSource::Command { command } => ("sh", vec!["-c".into(), command.clone()]),
-        SecretSource::None | SecretSource::Vault => bail!("not an external source"),
+        SecretSource::None | SecretSource::Vault | SecretSource::Keyring => bail!("not an external source"),
     };
     let output = Command::new(program)
         .args(&args)

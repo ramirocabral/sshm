@@ -145,7 +145,12 @@ copies to the other side, `F6`/`m` renames, `F7`/`n` creates a folder, `F8`/`d` 
   answered automatically, once per prompt; if sudo asks again right away, sshm stops and
   tells you.
 - **Per-host source.** Set the "Password source" field to one of:
-  - `vault` (the default);
+  - `keyring`: the desktop keyring (GNOME Keyring, KWallet, KeePassXC… anything that speaks the
+    Secret Service API), through `secret-tool` from libsecret. It is the default for new hosts
+    when `secret-tool` is installed. Entries are tagged `application=sshm host=<id>
+    kind=password|root_password`, and deleting a host removes them. Import and export only
+    carry vault passwords;
+  - `vault` (the default when there is no `secret-tool`);
   - `none`;
   - `bw:<item>` (Bitwarden CLI, needs `BW_SESSION`);
   - `rbw:<item>`;

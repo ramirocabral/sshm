@@ -15,7 +15,7 @@ use super::widgets::TextInput;
 use super::{App, Focus, TabKind};
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
-use crate::store::hosts::{Host, move_target, normalize_folder, parent_folder, rename_target};
+use crate::store::hosts::{Host, SecretSource, move_target, normalize_folder, parent_folder, rename_target};
 use crate::term::pane::PaneId;
 use crate::term::{keys, mouse};
 
@@ -378,7 +378,9 @@ impl App {
                     Some(Item::Host { id, .. }) => self.store.get(id).map(|h| h.folder.clone()).unwrap_or_default(),
                     None => String::new(),
                 };
-                (Host { folder, ..Host::default() }, false)
+                // New hosts keep their passwords in the system keyring when there is one.
+                let source = if crate::secrets::keyring::available() { SecretSource::Keyring } else { SecretSource::Vault };
+                (Host { folder, password: source.clone(), root_password: source, ..Host::default() }, false)
             }
         };
         let (saved_password, saved_root) = if self.vault.is_unlocked() {
@@ -1171,10 +1173,12 @@ impl App {
                 let _ = reply.send(Some("yes".into()));
             }
             ConfirmAction::DeleteHosts(ids) => {
+                let mut removed = Vec::new();
                 for id in &ids {
-                    self.store.remove(id);
+                    removed.extend(self.store.remove(id));
                     self.sidebar.marked.remove(id);
                 }
+                self.forget_keyring_secrets(removed);
                 self.persist_hosts();
                 if self.vault.is_unlocked() {
                     ids.iter().for_each(|id| self.vault.remove(id));
