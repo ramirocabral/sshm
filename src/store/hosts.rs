@@ -161,6 +161,21 @@ pub fn normalize_folder(s: &str) -> String {
     s.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/")
 }
 
+/// Where `input` from the rename dialog takes `folder`: a name stays in the same parent
+/// ("x/y" nests below it), a leading '/' gives the full path from the top. None when empty.
+pub fn rename_target(folder: &str, input: &str) -> Option<String> {
+    if normalize_folder(input).is_empty() {
+        return None;
+    }
+    Some(match input.trim_start().strip_prefix('/') {
+        Some(full) => normalize_folder(full),
+        None => {
+            let parent = folder.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+            normalize_folder(&format!("{parent}/{input}"))
+        }
+    })
+}
+
 /// When `folder` is `parent` or lies below it, the part after `parent` ("" or "/sub/…").
 pub fn subpath<'a>(folder: &'a str, parent: &str) -> Option<&'a str> {
     folder.strip_prefix(parent).filter(|rest| rest.is_empty() || rest.starts_with('/'))
@@ -324,6 +339,18 @@ mod tests {
         // Moving a folder inside itself keeps working off the old paths.
         assert_eq!(store.rename_folder("AAA", "AAA/old"), 2);
         assert_eq!(store.find_by_path("AAA/old/mx/b").map(|h| h.name.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn rename_target_stays_in_parent() {
+        let t = |folder, input| rename_target(folder, input);
+        assert_eq!(t("MAT/AT&T Datacom", "AT&T").as_deref(), Some("MAT/AT&T"));
+        assert_eq!(t("MAT/AT&T Datacom", " x / y ").as_deref(), Some("MAT/x/y"));
+        assert_eq!(t("Telefonica", "AAA").as_deref(), Some("AAA"));
+        assert_eq!(t("MAT/AT&T", " /AT&T").as_deref(), Some("AT&T"));
+        assert_eq!(t("AT&T", "/MAT/AT&T").as_deref(), Some("MAT/AT&T"));
+        assert_eq!(t("MAT/x", " "), None);
+        assert_eq!(t("MAT/x", "/"), None);
     }
 
     #[test]

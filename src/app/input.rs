@@ -15,7 +15,7 @@ use super::widgets::TextInput;
 use super::{App, Focus, TabKind};
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
-use crate::store::hosts::{Host, normalize_folder};
+use crate::store::hosts::{Host, rename_target};
 use crate::term::pane::PaneId;
 use crate::term::{keys, mouse};
 
@@ -608,9 +608,9 @@ impl App {
             KeyCode::Char('n') => self.open_host_form(None),
             KeyCode::Char('e') => match self.sidebar.items(&self.store).get(self.sidebar.selected).cloned() {
                 Some(Item::Host { id, .. }) => self.open_host_form(Some(id)),
-                Some(Item::Folder { path, .. }) => self.push_dialog(Dialog::Input(InputDialog {
-                    title: "Rename folder (a/b moves it into a)".into(),
-                    input: TextInput::new(path.clone()),
+                Some(Item::Folder { path, name, .. }) => self.push_dialog(Dialog::Input(InputDialog {
+                    title: format!("Rename {path} · /a/b moves it to a/b"),
+                    input: TextInput::new(name),
                     action: Some(InputAction::RenameFolder { from: path }),
                 })),
                 None => {}
@@ -1111,11 +1111,10 @@ impl App {
         }
     }
 
-    fn rename_folder(&mut self, from: &str, to: &str) {
-        let to = normalize_folder(to);
-        if to.is_empty() {
+    fn rename_folder(&mut self, from: &str, input: &str) {
+        let Some(to) = rename_target(from, input) else {
             return self.error("The folder name cannot be empty");
-        }
+        };
         if to == from {
             return;
         }

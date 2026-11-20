@@ -307,7 +307,7 @@ pub fn help_entries(app: &App) -> Vec<HelpLine> {
         row("o".into(), "open in the current tab"),
         row("/".into(), "search (fuzzy: name, host, user or tag); Ctrl+j/k moves while typing"),
         row("n / e / c / d".into(), "new / edit / duplicate / delete host"),
-        row("e on a folder".into(), "rename it; a/b moves it into a (its hosts and subfolders go along)"),
+        row("e on a folder".into(), "rename it in place; /a/b moves it to a/b (hosts and subfolders go along)"),
         row("s".into(), "SFTP"),
         row("y".into(), "copy user@host"),
         row("i / x".into(), "import / export"),
