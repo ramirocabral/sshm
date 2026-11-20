@@ -1,10 +1,11 @@
 mod dialogs;
 mod form;
 mod sftp;
+pub mod theme;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
@@ -12,11 +13,8 @@ use crate::app::sidebar::Item;
 use crate::app::{App, Focus, TabKind, ToastKind};
 use crate::term::pane::GridSize;
 use crate::term::render::{self, RenderOpts};
+use theme::colors;
 
-pub const ACCENT: Color = Color::Cyan;
-pub const BROADCAST: Color = Color::Red;
-pub const MUTED: Color = Color::DarkGray;
-const VISUAL_BG: Color = Color::Indexed(238);
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -59,7 +57,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let items = app.sidebar.items(&app.store);
     app.sidebar.clamp(items.len());
     let visual = app.sidebar.visual_range();
-    let border = if focused { Style::default().fg(ACCENT) } else { Style::default().fg(MUTED) };
+    let border = if focused { Style::default().fg(colors().accent) } else { Style::default().fg(colors().muted) };
     let title = match (&app.sidebar.search, app.sidebar.query.is_empty()) {
         _ if visual.is_some() => format!(" Hosts · {} selected ", app.sidebar.visual_hosts(&app.store, &items).len()),
         (Some(_), _) => " Search ".to_string(),
@@ -73,7 +71,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let mut list_area = inner;
     if let Some(search) = &app.sidebar.search {
         let [line, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
-        f.buffer_mut().set_string(line.x, line.y, "/", Style::default().fg(ACCENT));
+        f.buffer_mut().set_string(line.x, line.y, "/", Style::default().fg(colors().accent));
         let input_area = Rect { x: line.x + 1, width: line.width.saturating_sub(1), ..line };
         if let Some(p) = search.render(input_area, f.buffer_mut(), focused, Style::default()) {
             f.set_cursor_position(p);
@@ -87,9 +85,9 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             vec![
                 Line::from("No hosts yet."),
                 Line::from(""),
-                Line::from(Span::styled("n  new host", Style::default().fg(ACCENT))),
-                Line::from(Span::styled("i  import", Style::default().fg(ACCENT))),
-                Line::from(Span::styled("t  local shell", Style::default().fg(ACCENT))),
+                Line::from(Span::styled("n  new host", Style::default().fg(colors().accent))),
+                Line::from(Span::styled("i  import", Style::default().fg(colors().accent))),
+                Line::from(Span::styled("t  local shell", Style::default().fg(colors().accent))),
             ]
         } else {
             vec![Line::from("No matches")]
@@ -105,7 +103,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         let (text, style) = match item {
             Item::Folder { name, depth, expanded, count, .. } => {
                 let arrow = if *expanded { "▾" } else { "▸" };
-                (format!("{}{arrow} {name} ({count})", "  ".repeat(*depth)), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                (format!("{}{arrow} {name} ({count})", "  ".repeat(*depth)), Style::default().fg(colors().folder).add_modifier(Modifier::BOLD))
             }
             Item::Host { id, depth } => {
                 let Some(h) = app.store.get(id) else { continue };
@@ -113,9 +111,9 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 let indent = if app.sidebar.query.is_empty() { "  ".repeat(*depth) } else { String::new() };
                 let label = if app.sidebar.query.is_empty() { h.name.clone() } else { h.path() };
                 let style = if app.sidebar.marked.contains(id) {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(colors().success)
                 } else if connected.contains(id.as_str()) {
-                    Style::default().fg(ACCENT)
+                    Style::default().fg(colors().accent)
                 } else {
                     Style::default()
                 };
@@ -126,7 +124,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         let style = if selected {
             if focused { style.add_modifier(Modifier::REVERSED) } else { style.add_modifier(Modifier::UNDERLINED) }
         } else if in_visual {
-            style.bg(VISUAL_BG)
+            style.bg(colors().panel_focus)
         } else {
             style
         };
@@ -142,9 +140,9 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             && list_area.height > 6 && items.len() < (list_area.height as usize).saturating_sub(3) {
                 let y = list_area.bottom() - 2;
                 let target = h.display_target();
-                f.buffer_mut().set_stringn(list_area.x, y, &target, list_area.width as usize, Style::default().fg(MUTED));
+                f.buffer_mut().set_stringn(list_area.x, y, &target, list_area.width as usize, Style::default().fg(colors().muted));
                 if let Some(j) = &h.jump {
-                    f.buffer_mut().set_stringn(list_area.x, y + 1, format!("via {j}"), list_area.width as usize, Style::default().fg(MUTED));
+                    f.buffer_mut().set_stringn(list_area.x, y + 1, format!("via {j}"), list_area.width as usize, Style::default().fg(colors().muted));
                 }
             }
 }
@@ -152,7 +150,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_tabbar(f: &mut Frame, app: &mut App, area: Rect) {
     app.layout.tabs.clear();
     let buf = f.buffer_mut();
-    buf.set_style(area, Style::default().bg(Color::Indexed(236)));
+    buf.set_style(area, Style::default().bg(colors().panel));
     let mut x = area.x;
     for (i, tab) in app.tabs.iter().enumerate() {
         let active = i == app.active;
@@ -175,18 +173,18 @@ fn draw_tabbar(f: &mut Frame, app: &mut App, area: Rect) {
             break;
         }
         let style = if active {
-            Style::default().fg(Color::Black).bg(if broadcast { BROADCAST } else { ACCENT }).add_modifier(Modifier::BOLD)
+            Style::default().fg(colors().on_color).bg(if broadcast { colors().broadcast } else { colors().accent }).add_modifier(Modifier::BOLD)
         } else if broadcast {
-            Style::default().fg(BROADCAST).bg(Color::Indexed(236))
+            Style::default().fg(colors().broadcast).bg(colors().panel)
         } else {
-            Style::default().fg(Color::Gray).bg(Color::Indexed(236))
+            Style::default().fg(colors().subtle).bg(colors().panel)
         };
         buf.set_stringn(x, area.y, &text, w as usize, style);
         app.layout.tabs.push((i, Rect { x, y: area.y, width: w, height: 1 }));
         x += w;
     }
     if app.tabs.is_empty() {
-        buf.set_stringn(area.x + 1, area.y, "no sessions", area.width as usize, Style::default().fg(MUTED).bg(Color::Indexed(236)));
+        buf.set_stringn(area.x + 1, area.y, "no sessions", area.width as usize, Style::default().fg(colors().muted).bg(colors().panel));
     }
 }
 
@@ -232,11 +230,11 @@ fn draw_body(f: &mut Frame, app: &mut App, area: Rect) -> Option<Position> {
                 let inner = if bordered {
                     let in_broadcast = broadcast && !pane.excluded;
                     let color = if in_broadcast {
-                        BROADCAST
+                        colors().broadcast
                     } else if is_focused && main_focus {
-                        ACCENT
+                        colors().accent
                     } else {
-                        MUTED
+                        colors().muted
                     };
                     let mut title = format!(" {} ", pane.name);
                     if pane.excluded && broadcast {
@@ -276,7 +274,7 @@ fn draw_body(f: &mut Frame, app: &mut App, area: Rect) -> Option<Position> {
                     let w = (msg.chars().count() as u16).min(inner.width);
                     let x = inner.x + inner.width.saturating_sub(w) / 2;
                     let y = inner.bottom().saturating_sub(1);
-                    f.buffer_mut().set_stringn(x, y, &msg, w as usize, Style::default().fg(Color::Black).bg(Color::Yellow));
+                    f.buffer_mut().set_stringn(x, y, &msg, w as usize, Style::default().fg(colors().on_color).bg(colors().warning));
                 }
             }
             cursor
@@ -286,9 +284,9 @@ fn draw_body(f: &mut Frame, app: &mut App, area: Rect) -> Option<Position> {
 
 fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
     let leader = app.leader.label();
-    let k = |s: &str| Span::styled(s.to_string(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
+    let k = |s: &str| Span::styled(s.to_string(), Style::default().fg(colors().accent).add_modifier(Modifier::BOLD));
     let lines = vec![
-        Line::from(Span::styled("sshm", Style::default().add_modifier(Modifier::BOLD).fg(ACCENT))),
+        Line::from(Span::styled("sshm", Style::default().add_modifier(Modifier::BOLD).fg(colors().accent))),
         Line::from("SSH session manager"),
         Line::from(""),
         Line::from(vec![k("Enter"), Span::raw("  connect to the selected host")]),
@@ -311,63 +309,63 @@ fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let buf = f.buffer_mut();
-    buf.set_style(area, Style::default().bg(Color::Indexed(235)));
+    buf.set_style(area, Style::default().bg(colors().status_bar));
     let mut spans = Vec::new();
     if app.leader_pending {
-        spans.push(Span::styled(" LEADER ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(" LEADER ", Style::default().fg(colors().on_color).bg(colors().warning).add_modifier(Modifier::BOLD)));
         spans.push(Span::raw(" "));
     }
     if let Some(t) = app.active_term_tab()
         && t.broadcast {
             let n = t.panes.iter().filter(|p| app.panes.get(p).is_some_and(|p| !p.excluded)).count();
-            spans.push(Span::styled(format!(" BROADCAST {n} "), Style::default().fg(Color::White).bg(BROADCAST).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(format!(" colors().broadcast {n} "), Style::default().fg(colors().text).bg(colors().broadcast).add_modifier(Modifier::BOLD)));
             spans.push(Span::raw(" "));
         }
     let sidebar_visual = app.focus == Focus::Sidebar && app.sidebar.visual.is_some();
     if sidebar_visual {
-        spans.push(Span::styled(" VISUAL ", Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(" VISUAL ", Style::default().fg(colors().on_color).bg(colors().visual).add_modifier(Modifier::BOLD)));
         spans.push(Span::raw(" "));
     }
     if app.focused_pane().is_some_and(|p| p.copy_mode) {
-        spans.push(Span::styled(" COPY ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(" COPY ", Style::default().fg(colors().on_color).bg(colors().success).add_modifier(Modifier::BOLD)));
         spans.push(Span::raw(" "));
     }
     let leader = app.leader.label();
     if let Some((msg, _, kind)) = &app.toast {
         let style = match kind {
-            ToastKind::Info => Style::default().fg(Color::White),
-            ToastKind::Error => Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+            ToastKind::Info => Style::default().fg(colors().text),
+            ToastKind::Error => Style::default().fg(colors().error).add_modifier(Modifier::BOLD),
         };
         spans.push(Span::styled(msg.clone(), style));
     } else if app.focus == Focus::Main && app.focused_pane().is_some_and(|p| p.prompt.is_some() && p.host_id.is_some()) {
         spans.push(Span::styled(
             format!("Password prompt · {leader} p types it ({leader} P: root password)"),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default().fg(colors().warning).add_modifier(Modifier::BOLD),
         ));
     } else if app.leader_pending {
         spans.push(Span::styled(
             "n new · s sftp · d duplicate · b broadcast · x exclude · p/P password · [ copy · z zoom · r reconnect · w/W close pane/tab · ? help",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(colors().subtle),
         ));
     } else if sidebar_visual {
         spans.push(Span::styled(
             "j/k extend · Enter open in a grid · o add to tab · Space mark · m move · d delete · Esc cancel",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(colors().subtle),
         ));
     } else if app.focus == Focus::Sidebar {
         spans.push(Span::styled(
             "Enter connect · Space mark · v select · o add to tab · s sftp · n/e/d host · m move · / search · ? help",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(colors().subtle),
         ));
     } else {
-        spans.push(Span::styled(format!("{leader} is the leader key · {leader} ? help · {leader} Tab hosts"), Style::default().fg(MUTED)));
+        spans.push(Span::styled(format!("{leader} is the leader key · {leader} ? help · {leader} Tab hosts"), Style::default().fg(colors().muted)));
     }
     let vault = if app.vault.is_unlocked() {
-        Span::styled(" vault unlocked ", Style::default().fg(Color::Black).bg(Color::Green))
+        Span::styled(" vault unlocked ", Style::default().fg(colors().on_color).bg(colors().success))
     } else if app.vault.exists() {
-        Span::styled(" vault locked ", Style::default().fg(Color::Gray).bg(Color::Indexed(238)))
+        Span::styled(" vault locked ", Style::default().fg(colors().subtle).bg(colors().panel_focus))
     } else {
-        Span::styled(" no vault ", Style::default().fg(Color::Gray).bg(Color::Indexed(238)))
+        Span::styled(" no vault ", Style::default().fg(colors().subtle).bg(colors().panel_focus))
     };
     let vault_w = vault.width() as u16;
     let left_w = area.width.saturating_sub(vault_w + 1);

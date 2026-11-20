@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 
-use super::{ACCENT, MUTED};
+use super::theme::colors;
 use crate::app::sftp::{Panel, TransferState};
 use crate::app::{App, Focus, TabKind};
 
@@ -57,7 +57,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     rects.push((true, draw_panel(f, &mut view.remote, right, &remote_title, focused && remote_active)));
 
     if transfers_h > 0 {
-        let block = Block::default().borders(Borders::TOP).title(" Transfers (x clears finished ones) ").border_style(Style::default().fg(MUTED));
+        let block = Block::default().borders(Borders::TOP).title(" Transfers (x clears finished ones) ").border_style(Style::default().fg(colors().muted));
         let inner = block.inner(transfers);
         f.render_widget(block, transfers);
         for (i, t) in view.transfers.iter().rev().take(6).enumerate() {
@@ -65,38 +65,38 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             let [label_r, gauge_r] = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(row);
             let arrow = if t.upload { "↑" } else { "↓" };
             let (state, color) = match &t.state {
-                TransferState::Queued => ("queued".to_string(), Color::Gray),
+                TransferState::Queued => ("queued".to_string(), colors().subtle),
                 TransferState::Running => {
                     let secs = t.started.elapsed().as_secs_f64().max(0.1);
-                    (format!("{}/s", human((t.done as f64 / secs) as u64)), ACCENT)
+                    (format!("{}/s", human((t.done as f64 / secs) as u64)), colors().accent)
                 }
-                TransferState::Done => ("done".to_string(), Color::Green),
-                TransferState::Failed(e) => (format!("error: {e}"), Color::LightRed),
+                TransferState::Done => ("done".to_string(), colors().success),
+                TransferState::Failed(e) => (format!("error: {e}"), colors().error),
             };
             let label = format!("{arrow} {} · {} / {} · {state}", t.label, human(t.done), human(t.total));
             f.buffer_mut().set_stringn(label_r.x, label_r.y, &label, label_r.width as usize, Style::default().fg(color));
             let ratio = if t.total == 0 { if t.state == TransferState::Done { 1.0 } else { 0.0 } } else { (t.done as f64 / t.total as f64).min(1.0) };
-            f.render_widget(Gauge::default().ratio(ratio).gauge_style(Style::default().fg(color).bg(Color::Indexed(237))), gauge_r);
+            f.render_widget(Gauge::default().ratio(ratio).gauge_style(Style::default().fg(color).bg(colors().panel)), gauge_r);
         }
     }
 
     let help = "Tab side · Enter/l open · h/⌫ up · Space mark · F5/c copy to other side · F6/m rename · F7/n mkdir · F8/d delete · / go to · . hidden · r refresh · q close";
-    let line = Line::from(vec![Span::styled(view.status.clone(), Style::default().fg(Color::White)), Span::raw("  "), Span::styled(help, Style::default().fg(MUTED))]);
+    let line = Line::from(vec![Span::styled(view.status.clone(), Style::default().fg(colors().text)), Span::raw("  "), Span::styled(help, Style::default().fg(colors().muted))]);
     f.render_widget(Paragraph::new(line), status);
     app.layout.sftp_panels = rects;
 }
 
 fn draw_panel(f: &mut Frame, p: &mut Panel, area: Rect, title: &str, focused: bool) -> Rect {
-    let color = if focused { ACCENT } else { MUTED };
+    let color = if focused { colors().accent } else { colors().muted };
     let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(color)).title(Span::styled(title.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)));
     let inner = block.inner(area);
     f.render_widget(block, area);
     if p.loading && p.entries.is_empty() {
-        f.render_widget(Paragraph::new("Loading…").style(Style::default().fg(MUTED)), inner);
+        f.render_widget(Paragraph::new("Loading…").style(Style::default().fg(colors().muted)), inner);
         return inner;
     }
     if let Some(e) = &p.error {
-        f.render_widget(Paragraph::new(e.clone()).style(Style::default().fg(Color::LightRed)).wrap(ratatui::widgets::Wrap { trim: true }), inner);
+        f.render_widget(Paragraph::new(e.clone()).style(Style::default().fg(colors().error)).wrap(ratatui::widgets::Wrap { trim: true }), inner);
         return inner;
     }
     let h = inner.height as usize;
@@ -110,12 +110,12 @@ fn draw_panel(f: &mut Frame, p: &mut Panel, area: Rect, title: &str, focused: bo
     for (row, (i, e)) in p.entries.iter().enumerate().skip(p.scroll).take(h).enumerate() {
         let y = inner.y + row as u16;
         let marked = p.marked.contains(&e.name);
-        let mut style = if e.is_dir { Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD) } else { Style::default() };
+        let mut style = if e.is_dir { Style::default().fg(colors().directory).add_modifier(Modifier::BOLD) } else { Style::default() };
         if e.is_link {
-            style = style.fg(Color::Cyan);
+            style = style.fg(colors().accent);
         }
         if marked {
-            style = style.fg(Color::Yellow);
+            style = style.fg(colors().warning);
         }
         if i == p.selected {
             style = if focused { style.add_modifier(Modifier::REVERSED) } else { style.add_modifier(Modifier::UNDERLINED) };
@@ -126,7 +126,7 @@ fn draw_panel(f: &mut Frame, p: &mut Panel, area: Rect, title: &str, focused: bo
         f.buffer_mut().set_stringn(inner.x, y, &name, w.saturating_sub(meta_w + 1), style);
         let mx = inner.right().saturating_sub(meta.chars().count() as u16);
         if meta_w > 0 {
-            f.buffer_mut().set_stringn(mx, y, &meta, meta_w, style.fg(if i == p.selected && focused { Color::Reset } else { MUTED }));
+            f.buffer_mut().set_stringn(mx, y, &meta, meta_w, style.fg(if i == p.selected && focused { Color::Reset } else { colors().muted }));
         }
     }
     inner

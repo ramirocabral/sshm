@@ -69,6 +69,10 @@ impl App {
                     f.form.paste(&text);
                     None
                 }
+                Dialog::Theme(f) => {
+                    f.form.paste(&text);
+                    None
+                }
                 Dialog::Help(h) => h.search.as_mut(),
                 _ => None,
             };
@@ -1130,6 +1134,16 @@ impl App {
                 FormEvent::Submit => self.run_move(d),
                 _ => keep(self, Dialog::Move(d)),
             },
+            Dialog::Theme(mut d) => match d.form.handle_key(&key) {
+                FormEvent::Cancel => self.preview_theme(&d.previous),
+                FormEvent::Submit => self.save_theme(d),
+                ev => {
+                    if ev == FormEvent::Changed("theme") {
+                        self.preview_theme(&d.form.value("theme"));
+                    }
+                    keep(self, Dialog::Theme(d));
+                }
+            },
         }
     }
 
@@ -1191,6 +1205,23 @@ impl App {
         }
     }
 
+    fn preview_theme(&mut self, name: &str) {
+        if let Some(theme) = crate::ui::theme::find(name) {
+            crate::ui::theme::apply(theme, self.truecolor);
+            self.dirty = true;
+        }
+    }
+
+    fn save_theme(&mut self, d: ThemeForm) {
+        let name = d.form.value("theme");
+        self.preview_theme(&name);
+        self.cfg.theme = name.clone();
+        match crate::store::config::Config::save_theme(&name) {
+            Ok(()) => self.info(format!("Theme: {name}")),
+            Err(e) => self.error(format!("Theme applied, but could not save config.toml: {e:#}")),
+        }
+    }
+
     fn rename_folder(&mut self, from: &str, input: &str) {
         let to = match rename_target(from, input) {
             Ok(to) => to,
@@ -1226,6 +1257,7 @@ impl App {
             }
             Command::ToggleBroadcast => self.toggle_broadcast(),
             Command::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
+            Command::Theme => self.push_dialog(Dialog::Theme(ThemeForm::new(&self.cfg.theme))),
             Command::Help => self.push_dialog(Dialog::Help(HelpDialog::default())),
             Command::Paths => self.push_dialog(Dialog::Message {
                 title: "Locations".into(),
@@ -1403,6 +1435,14 @@ impl App {
                 ev
             }
             Some(Dialog::Move(d)) => act(&mut d.form),
+            Some(Dialog::Theme(d)) => {
+                let ev = act(&mut d.form);
+                if ev == FormEvent::Changed("theme") {
+                    let name = d.form.value("theme");
+                    self.preview_theme(&name);
+                }
+                ev
+            }
             Some(Dialog::Help(h)) => {
                 match m.kind {
                     MouseEventKind::ScrollUp => h.scroll = h.scroll.saturating_sub(3),
@@ -1419,6 +1459,8 @@ impl App {
                 (Some(Dialog::Import(d)), FormEvent::Submit) => self.run_import(d),
                 (Some(Dialog::Export(d)), FormEvent::Submit) => self.run_export(d),
                 (Some(Dialog::Move(d)), FormEvent::Submit) => self.run_move(d),
+                (Some(Dialog::Theme(d)), FormEvent::Submit) => self.save_theme(d),
+                (Some(Dialog::Theme(d)), FormEvent::Cancel) => self.preview_theme(&d.previous),
                 _ => {}
             }
         }

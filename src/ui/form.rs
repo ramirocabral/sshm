@@ -1,14 +1,12 @@
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-use super::{ACCENT, MUTED};
+use super::theme::colors;
 use crate::app::form::{Button, FieldKind, Form, Mode};
 
-const BOX: Color = Color::Indexed(236);
-const BOX_FOCUS: Color = Color::Indexed(238);
 
 pub struct FormLayout {
     pub cursor: Option<Position>,
@@ -52,8 +50,8 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(format!(" {} ", form.title), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)));
+        .border_style(Style::default().fg(colors().accent))
+        .title(Span::styled(format!(" {} ", form.title), Style::default().fg(colors().accent).add_modifier(Modifier::BOLD)));
     let inner = block.inner(rect).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
     f.render_widget(block, rect);
 
@@ -75,26 +73,26 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
             Row::Section(name) => {
                 let title = format!("{name} ");
                 let tw = title.chars().count() as u16;
-                put(f, inner.x, y, &title, inner.width, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
+                put(f, inner.x, y, &title, inner.width, Style::default().fg(colors().accent).add_modifier(Modifier::BOLD));
                 let line = "─".repeat(inner.width.saturating_sub(tw) as usize);
-                put(f, inner.x + tw, y, &line, inner.width.saturating_sub(tw), Style::default().fg(MUTED));
+                put(f, inner.x + tw, y, &line, inner.width.saturating_sub(tw), Style::default().fg(colors().muted));
             }
             Row::Field(i) => {
                 let field = &form.fields[*i];
                 let focused = *i == form.focus;
                 out.rows.push((*i, Rect { x: inner.x, y, width: inner.width, height: 1 }));
                 if focused {
-                    put(f, inner.x, y, "›", 1, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
+                    put(f, inner.x, y, "›", 1, Style::default().fg(colors().accent).add_modifier(Modifier::BOLD));
                 }
                 let label_style =
-                    if focused { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Gray) };
+                    if focused { Style::default().fg(colors().accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(colors().subtle) };
                 put(f, inner.x + 2, y, field.label, label_w, label_style);
 
                 let bx = Rect { x: input_x, y, width: input_w, height: 1 };
                 if focused {
                     focus_box = Some(bx);
                 }
-                let bg = if focused { BOX_FOCUS } else { BOX };
+                let bg = if focused { colors().panel_focus } else { colors().panel };
                 let boxed = Style::default().bg(bg);
                 let text_area = Rect { x: bx.x + 1, width: bx.width.saturating_sub(3), ..bx };
                 match &field.kind {
@@ -108,7 +106,7 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
                             _ => field.placeholder.clone(),
                         };
                         if input.value.is_empty() {
-                            put(f, text_area.x, y, &placeholder, text_area.width, boxed.fg(MUTED).add_modifier(Modifier::ITALIC));
+                            put(f, text_area.x, y, &placeholder, text_area.width, boxed.fg(colors().muted).add_modifier(Modifier::ITALIC));
                         }
                         let show_cursor = focused
                             && form.mode == Mode::Insert
@@ -118,31 +116,31 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
                         }
                         if let FieldKind::Combo { options, .. } = &field.kind
                             && !options.is_empty() {
-                                put(f, bx.right().saturating_sub(2), y, "▾", 1, boxed.fg(if focused { ACCENT } else { MUTED }));
+                                put(f, bx.right().saturating_sub(2), y, "▾", 1, boxed.fg(if focused { colors().accent } else { colors().muted }));
                             }
                     }
                     FieldKind::Select { options, selected } => {
                         f.buffer_mut().set_style(bx, boxed);
                         if let Some(c) = options.get(*selected) {
                             let lw = c.label.chars().count() as u16;
-                            put(f, text_area.x, y, &c.label, text_area.width, boxed.fg(Color::White).add_modifier(Modifier::BOLD));
+                            put(f, text_area.x, y, &c.label, text_area.width, boxed.fg(colors().text).add_modifier(Modifier::BOLD));
                             if !c.detail.is_empty() && lw + 3 < text_area.width {
                                 let d = format!(" · {}", c.detail);
-                                put(f, text_area.x + lw, y, &d, text_area.width.saturating_sub(lw + 2), boxed.fg(MUTED));
+                                put(f, text_area.x + lw, y, &d, text_area.width.saturating_sub(lw + 2), boxed.fg(colors().muted));
                             }
                         }
                         let arrows = if focused { "◂▸" } else { " ▾" };
-                        put(f, bx.right().saturating_sub(3), y, arrows, 2, boxed.fg(if focused { ACCENT } else { MUTED }));
+                        put(f, bx.right().saturating_sub(3), y, arrows, 2, boxed.fg(if focused { colors().accent } else { colors().muted }));
                     }
                     FieldKind::Toggle(on) => {
                         let (txt, style) = if *on {
-                            (" ON ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+                            (" ON ", Style::default().fg(colors().on_color).bg(colors().success).add_modifier(Modifier::BOLD))
                         } else {
-                            (" OFF ", Style::default().fg(Color::Gray).bg(BOX_FOCUS))
+                            (" OFF ", Style::default().fg(colors().subtle).bg(colors().panel_focus))
                         };
                         put(f, bx.x, y, txt, bx.width, style);
                         if focused {
-                            put(f, bx.x + 6, y, "Space toggles", bx.width.saturating_sub(6), Style::default().fg(MUTED));
+                            put(f, bx.x + 6, y, "Space toggles", bx.width.saturating_sub(6), Style::default().fg(colors().muted));
                         }
                     }
                 }
@@ -151,10 +149,10 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
     }
 
     if scroll > 0 {
-        put(f, inner.right().saturating_sub(1), inner.y, "▲", 1, Style::default().fg(MUTED));
+        put(f, inner.right().saturating_sub(1), inner.y, "▲", 1, Style::default().fg(colors().muted));
     }
     if scroll + body_h < rows.len() {
-        put(f, inner.right().saturating_sub(1), inner.y + body_h.saturating_sub(1) as u16, "▼", 1, Style::default().fg(MUTED));
+        put(f, inner.right().saturating_sub(1), inner.y + body_h.saturating_sub(1) as u16, "▼", 1, Style::default().fg(colors().muted));
     }
 
     let hint_y = inner.bottom().saturating_sub(4);
@@ -163,11 +161,11 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
         (None, Some(Button::Submit)) => format!("Enter: {}", form.submit_label.to_lowercase()),
         (None, _) => "Enter: close without saving".into(),
     };
-    put(f, inner.x, hint_y, &hint, inner.width, Style::default().fg(Color::Gray));
+    put(f, inner.x, hint_y, &hint, inner.width, Style::default().fg(colors().subtle));
     if form.confirm_discard {
-        put(f, inner.x, hint_y + 1, "Discard unsaved changes?  y yes · n no", inner.width, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        put(f, inner.x, hint_y + 1, "Discard unsaved changes?  y yes · n no", inner.width, Style::default().fg(colors().warning).add_modifier(Modifier::BOLD));
     } else if let Some(e) = &form.error {
-        put(f, inner.x, hint_y + 1, &format!("✗ {e}"), inner.width, Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD));
+        put(f, inner.x, hint_y + 1, &format!("✗ {e}"), inner.width, Style::default().fg(colors().error).add_modifier(Modifier::BOLD));
     }
 
     let buttons_y = inner.bottom().saturating_sub(2);
@@ -178,9 +176,9 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
         bx = bx.saturating_sub(w);
         let focused = form.focused_button() == Some(b);
         let style = match (focused, b) {
-            (true, _) => Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD),
-            (false, Button::Submit) => Style::default().fg(ACCENT).bg(BOX_FOCUS).add_modifier(Modifier::BOLD),
-            (false, Button::Cancel) => Style::default().fg(Color::Gray).bg(BOX_FOCUS),
+            (true, _) => Style::default().fg(colors().on_color).bg(colors().accent).add_modifier(Modifier::BOLD),
+            (false, Button::Submit) => Style::default().fg(colors().accent).bg(colors().panel_focus).add_modifier(Modifier::BOLD),
+            (false, Button::Cancel) => Style::default().fg(colors().subtle).bg(colors().panel_focus),
         };
         put(f, bx, buttons_y, &text, w, style);
         out.rows.push((form.button_index(b), Rect { x: bx, y: buttons_y, width: w, height: 1 }));
@@ -200,15 +198,15 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
     let moves = if insert { "Ctrl+j/k move" } else { "j/k move" };
     let quit = if insert { "" } else { " · q cancel" };
     let (badge, badge_style) = if insert {
-        (" INSERT ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+        (" INSERT ", Style::default().fg(colors().on_color).bg(colors().success).add_modifier(Modifier::BOLD))
     } else {
-        (" NORMAL ", Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD))
+        (" NORMAL ", Style::default().fg(colors().on_color).bg(colors().accent).add_modifier(Modifier::BOLD))
     };
     let keys = Line::from(vec![
         Span::styled(badge, badge_style),
-        Span::styled(format!(" {action} · {moves} · "), Style::default().fg(MUTED)),
-        Span::styled(format!("Ctrl+S {}", form.submit_label.to_lowercase()), Style::default().fg(ACCENT)),
-        Span::styled(quit.to_string(), Style::default().fg(MUTED)),
+        Span::styled(format!(" {action} · {moves} · "), Style::default().fg(colors().muted)),
+        Span::styled(format!("Ctrl+S {}", form.submit_label.to_lowercase()), Style::default().fg(colors().accent)),
+        Span::styled(quit.to_string(), Style::default().fg(colors().muted)),
     ]);
     f.render_widget(Paragraph::new(keys), Rect { x: inner.x, y: inner.bottom().saturating_sub(1), width: inner.width, height: 1 });
 
@@ -223,7 +221,7 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
         let py = if below + ph <= area.bottom() { below } else { anchor.y.saturating_sub(ph) };
         let prect = Rect { x: anchor.x, y: py, width: pw, height: ph };
         f.render_widget(Clear, prect);
-        let pblock = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(ACCENT));
+        let pblock = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(colors().accent));
         let pin = pblock.inner(prect);
         f.render_widget(pblock, prect);
         let start = if p.selected >= max_items { p.selected + 1 - max_items } else { 0 };
@@ -231,13 +229,13 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
             let y = pin.y + row as u16;
             let r = Rect { x: pin.x, y, width: pin.width, height: 1 };
             let selected = idx == p.selected;
-            let base = if selected { Style::default().fg(Color::Black).bg(ACCENT) } else { Style::default() };
+            let base = if selected { Style::default().fg(colors().on_color).bg(colors().accent) } else { Style::default() };
             f.buffer_mut().set_style(r, base);
             put(f, pin.x + 1, y, &c.label, pin.width.saturating_sub(1), base.add_modifier(Modifier::BOLD));
             if !c.detail.is_empty() {
                 let x = pin.x + 1 + label_max as u16 + 2;
                 if x < pin.right() {
-                    put(f, x, y, &c.detail, pin.right() - x, if selected { base } else { Style::default().fg(MUTED) });
+                    put(f, x, y, &c.detail, pin.right() - x, if selected { base } else { Style::default().fg(colors().muted) });
                 }
             }
             out.popup.push((idx, r));

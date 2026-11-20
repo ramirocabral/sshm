@@ -25,6 +25,8 @@ pub struct Config {
     pub clipboard_command: Option<String>,
     /// Seconds after which an unused vault gets locked again (0 = never).
     pub vault_timeout: u64,
+    /// Colors of the UI: default, light, nord, gruvbox, dracula, catppuccin, solarized.
+    pub theme: String,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             term: "xterm-256color".into(),
             clipboard_command: None,
             vault_timeout: 0,
+            theme: "default".into(),
         }
     }
 }
@@ -57,7 +60,27 @@ impl Config {
         let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let cfg: Config = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         KeySpec::parse(&cfg.leader).with_context(|| format!("invalid `leader` in {}", path.display()))?;
+        if crate::ui::theme::find(&cfg.theme).is_none() {
+            bail!("unknown `theme` \"{}\" in {} (available: {})", cfg.theme, path.display(), crate::ui::theme::names());
+        }
         Ok(cfg)
+    }
+
+    /// Sets `theme` in config.toml and leaves the rest of the file, comments included, as it was.
+    pub fn save_theme(name: &str) -> Result<()> {
+        let path = Self::path();
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let value = toml::Value::String(name.to_string()).to_string();
+        let new = set_top_level_key(&text, "theme", &value);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, new).with_context(|| format!("writing {}", tmp.display()))?;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            std::fs::set_permissions(&tmp, meta.permissions()).ok();
+        }
+        std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
     }
 
     pub fn leader_key(&self) -> KeySpec {
@@ -137,9 +160,50 @@ impl KeySpec {
     }
 }
 
+/// Replaces the top-level `key = …` line, or adds one before the first [table] (or at the end).
+fn set_top_level_key(text: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = {value}");
+    let mut out: Vec<String> = Vec::new();
+    let mut done = false;
+    let mut in_table = false;
+    for l in text.lines() {
+        let trimmed = l.trim_start();
+        if trimmed.starts_with('[') {
+            if !done {
+                out.push(line.clone());
+                done = true;
+            }
+            in_table = true;
+        }
+        let is_key = !trimmed.starts_with('#') && trimmed.split_once('=').is_some_and(|(k, _)| k.trim() == key);
+        if !in_table && is_key && !done {
+            out.push(line.clone());
+            done = true;
+            continue;
+        }
+        out.push(l.to_string());
+    }
+    if !done {
+        out.push(line);
+    }
+    out.join("\n") + "\n"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_top_level_key_keeps_the_rest() {
+        let text = "leader = \"ctrl+space\"\n# theme = \"x\"\ntheme = \"nord\"   # mine\nscrollback = 5\n";
+        assert_eq!(
+            set_top_level_key(text, "theme", "\"dracula\""),
+            "leader = \"ctrl+space\"\n# theme = \"x\"\ntheme = \"dracula\"\nscrollback = 5\n"
+        );
+        assert_eq!(set_top_level_key("a = 1", "theme", "\"x\""), "a = 1\ntheme = \"x\"\n");
+        assert_eq!(set_top_level_key("a = 1\n[t]\ntheme = 2\n", "theme", "\"x\""), "a = 1\ntheme = \"x\"\n[t]\ntheme = 2\n");
+        assert_eq!(set_top_level_key("", "theme", "\"x\""), "theme = \"x\"\n");
+    }
 
     #[test]
     fn parse_keys() {

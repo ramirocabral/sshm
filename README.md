@@ -194,8 +194,14 @@ sidebar_width = 32
 ssh_command = "ssh"
 term = "xterm-256color"    # TERM inside the sessions
 vault_timeout = 0          # seconds of inactivity before locking (0 = never)
+theme = "default"          # default, light, nord, gruvbox, dracula, catppuccin, solarized
 # clipboard_command = "wl-copy"
 ```
+
+`theme` colors sshm's own UI; sessions keep the colors the remote programs use. The command
+palette (`:` → "Change the theme") previews every theme as you move through the list and writes
+the one you save to `config.toml`, leaving the rest of the file as it was. Without truecolor
+(`COLORTERM`), the themes use the nearest of the 256 colors.
 
 Files:
 

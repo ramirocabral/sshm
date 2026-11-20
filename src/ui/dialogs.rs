@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
-use super::{ACCENT, MUTED};
+use super::theme::colors;
 use crate::app::App;
 use crate::app::dialogs::*;
 use crate::ssh::command::PromptKind;
@@ -32,14 +32,14 @@ fn text(f: &mut Frame, x: u16, y: u16, s: &str, w: u16, style: Style) {
 }
 
 fn field_row(f: &mut Frame, inner: Rect, y: u16, label: &str, label_w: u16, focused: bool) -> Rect {
-    let style = if focused { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Gray) };
+    let style = if focused { Style::default().fg(colors().accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(colors().subtle) };
     text(f, inner.x, y, label, label_w, style);
     Rect { x: inner.x + label_w + 1, y, width: inner.width.saturating_sub(label_w + 1), height: 1 }
 }
 
 fn hint(f: &mut Frame, inner: Rect, s: &str) {
     let y = inner.bottom().saturating_sub(1);
-    text(f, inner.x, y, s, inner.width, Style::default().fg(MUTED));
+    text(f, inner.x, y, s, inner.width, Style::default().fg(colors().muted));
 }
 
 pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Position> {
@@ -47,7 +47,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         Dialog::Message { title, lines } => {
             let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(20).max(title.chars().count() + 4) as u16 + 4;
             let rect = centered(area, w.min(100), lines.len() as u16 + 4);
-            let inner = frame(f, rect, title, ACCENT);
+            let inner = frame(f, rect, title, colors().accent);
             let body: Vec<Line> = lines.iter().map(|l| Line::from(l.as_str())).collect();
             f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inner);
             hint(f, inner, "Enter/Esc closes");
@@ -55,7 +55,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         }
         Dialog::Confirm(c) => {
             let rect = centered(area, 70, 8 + (c.body.len() as u16 / 60));
-            let color = if matches!(c.action, Some(ConfirmAction::HostKey(_))) { Color::Yellow } else { Color::LightRed };
+            let color = if matches!(c.action, Some(ConfirmAction::HostKey(_))) { colors().warning } else { colors().error };
             let inner = frame(f, rect, &c.title, color);
             f.render_widget(Paragraph::new(c.body.clone()).wrap(Wrap { trim: false }), inner);
             hint(f, inner, "y/Enter yes · n/Esc no");
@@ -71,7 +71,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
                 "Unlock vault"
             };
             let rect = centered(area, 64, if two { 10 } else { 8 });
-            let inner = frame(f, rect, title, Color::Yellow);
+            let inner = frame(f, rect, title, colors().warning);
             let intro = if u.creating && !u.changing {
                 "Choose the master password that encrypts your passwords."
             } else if u.changing {
@@ -87,7 +87,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
                 cursor = u.confirm.render(r2, f.buffer_mut(), u.field == 1, Style::default()).or(cursor);
             }
             if let Some(e) = &u.error {
-                text(f, inner.x, inner.y + if two { 5 } else { 4 }, e, inner.width, Style::default().fg(Color::LightRed));
+                text(f, inner.x, inner.y + if two { 5 } else { 4 }, e, inner.width, Style::default().fg(colors().error));
             }
             hint(f, inner, "Enter confirms · Esc cancels");
             cursor
@@ -95,7 +95,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         Dialog::AskPass(a) => {
             let lines = a.prompt.lines().count() as u16;
             let rect = centered(area, 76, 8 + lines);
-            let inner = frame(f, rect, &format!("{} · ssh asks", a.label), Color::Yellow);
+            let inner = frame(f, rect, &format!("{} · ssh asks", a.label), colors().warning);
             f.render_widget(Paragraph::new(a.prompt.clone()).wrap(Wrap { trim: false }), Rect { height: lines.max(1), ..inner });
             let y = inner.y + lines + 1;
             let mut input = a.input.clone();
@@ -103,7 +103,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
             let r = field_row(f, inner, y, "Answer", 10, true);
             let cursor = input.render(r, f.buffer_mut(), true, Style::default());
             if let Some(n) = &a.note {
-                text(f, inner.x, y + 1, n, inner.width, Style::default().fg(Color::LightRed));
+                text(f, inner.x, y + 1, n, inner.width, Style::default().fg(colors().error));
             }
             let mut h = "Enter sends · Esc cancels".to_string();
             if a.secret_kind.is_some() {
@@ -114,7 +114,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         }
         Dialog::Input(d) => {
             let rect = centered(area, 70, 5);
-            let inner = frame(f, rect, &d.title, ACCENT);
+            let inner = frame(f, rect, &d.title, colors().accent);
             let cursor = d.input.render(Rect { height: 1, ..inner }, f.buffer_mut(), true, Style::default());
             hint(f, inner, "Enter confirms · Esc cancels");
             cursor
@@ -122,8 +122,8 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         Dialog::Palette(p) => {
             let matches = p.matches();
             let rect = centered(area, 80, matches.len() as u16 + 5);
-            let inner = frame(f, rect, "Commands", ACCENT);
-            text(f, inner.x, inner.y, ">", 1, Style::default().fg(ACCENT));
+            let inner = frame(f, rect, "Commands", colors().accent);
+            text(f, inner.x, inner.y, ">", 1, Style::default().fg(colors().accent));
             let cursor = p.input.render(Rect { x: inner.x + 2, y: inner.y, width: inner.width.saturating_sub(2), height: 1 }, f.buffer_mut(), true, Style::default());
             for (i, c) in matches.iter().enumerate() {
                 let y = inner.y + 2 + i as u16;
@@ -139,27 +139,28 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         Dialog::Import(d) => draw_form(f, app, &d.form, area, 90),
         Dialog::Export(d) => draw_form(f, app, &d.form, area, 90),
         Dialog::Move(d) => draw_form(f, app, &d.form, area, 80),
+        Dialog::Theme(d) => draw_form(f, app, &d.form, area, 80),
         Dialog::Help(h) => {
             let rect = centered(area, 104, area.height.saturating_sub(4));
-            let inner = frame(f, rect, "Help", ACCENT);
+            let inner = frame(f, rect, "Help", colors().accent);
             let entries = filter_help(help_entries(app), &h.query);
             let mut cursor = None;
             let mut list = inner;
             if h.search.is_some() || !h.query.is_empty() {
-                text(f, inner.x, inner.y, "/", 1, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
+                text(f, inner.x, inner.y, "/", 1, Style::default().fg(colors().accent).add_modifier(Modifier::BOLD));
                 let r = Rect { x: inner.x + 2, y: inner.y, width: inner.width.saturating_sub(2), height: 1 };
                 match &h.search {
                     Some(input) => cursor = input.render(r, f.buffer_mut(), true, Style::default()),
-                    None => text(f, r.x, r.y, &h.query, r.width, Style::default().fg(Color::Yellow)),
+                    None => text(f, r.x, r.y, &h.query, r.width, Style::default().fg(colors().warning)),
                 }
                 let n = entries.iter().filter(|e| matches!(e, HelpLine::Row(..) | HelpLine::Text(_))).count();
                 let count = format!("{n} matches");
                 let cw = count.chars().count() as u16;
-                text(f, inner.right().saturating_sub(cw), inner.y, &count, cw, Style::default().fg(MUTED));
+                text(f, inner.right().saturating_sub(cw), inner.y, &count, cw, Style::default().fg(colors().muted));
                 list = Rect { y: inner.y + 2, height: inner.height.saturating_sub(2), ..inner };
             }
             let lines: Vec<Line> = if entries.is_empty() {
-                vec![Line::from(Span::styled("No shortcut matches the search", Style::default().fg(MUTED)))]
+                vec![Line::from(Span::styled("No shortcut matches the search", Style::default().fg(colors().muted)))]
             } else {
                 entries.iter().map(|e| e.render(&h.query)).collect()
             };
@@ -205,9 +206,9 @@ impl HelpLine {
 
     fn render(&self, query: &str) -> Line<'static> {
         match self {
-            HelpLine::Head(t) => Line::from(Span::styled(t.clone(), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))),
+            HelpLine::Head(t) => Line::from(Span::styled(t.clone(), Style::default().fg(colors().accent).add_modifier(Modifier::BOLD))),
             HelpLine::Row(k, d) => {
-                let mut spans = vec![Span::styled(format!("  {k:<34} "), Style::default().fg(Color::Yellow))];
+                let mut spans = vec![Span::styled(format!("  {k:<34} "), Style::default().fg(colors().warning))];
                 spans.extend(highlight(d, query));
                 Line::from(spans)
             }
@@ -234,7 +235,7 @@ fn highlight(text: &str, query: &str) -> Vec<Span<'static>> {
         if start > pos {
             spans.push(Span::raw(text[pos..start].to_string()));
         }
-        spans.push(Span::styled(text[start..end].to_string(), Style::default().fg(Color::Black).bg(Color::Yellow)));
+        spans.push(Span::styled(text[start..end].to_string(), Style::default().fg(colors().on_color).bg(colors().warning)));
         pos = end;
     }
     spans.push(Span::raw(text[pos..].to_string()));

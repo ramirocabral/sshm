@@ -135,6 +135,10 @@ impl App {
     pub fn new(cfg: Config, tx: UnboundedSender<AppEvent>, askpass_sock: PathBuf, runtime_dir: PathBuf) -> Result<Self> {
         let store = HostStore::load_default()?;
         let leader = cfg.leader_key();
+        let truecolor = crate::term::render::truecolor_supported();
+        if let Some(theme) = crate::ui::theme::find(&cfg.theme) {
+            crate::ui::theme::apply(theme, truecolor);
+        }
         let mut sidebar = Sidebar::default();
         let mut saved_expanded = HashSet::new();
         if let Some(expanded) = UiState::load().expanded {
@@ -161,7 +165,7 @@ impl App {
             owners: HashMap::new(),
             pending_secrets: HashMap::new(),
             layout: LayoutCache::default(),
-            truecolor: crate::term::render::truecolor_supported(),
+            truecolor,
             quit: false,
             dirty: true,
             last_vault_use: Instant::now(),

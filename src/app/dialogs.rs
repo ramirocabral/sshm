@@ -19,6 +19,7 @@ pub enum Dialog {
     Import(ImportForm),
     Export(ExportForm),
     Move(MoveForm),
+    Theme(ThemeForm),
 }
 
 /// What to do once a secret is available.
@@ -104,13 +105,14 @@ pub enum Command {
     ChangeMaster,
     ToggleBroadcast,
     ToggleSidebar,
+    Theme,
     Help,
     Paths,
     Quit,
 }
 
 impl Command {
-    pub const ALL: [Command; 12] = [
+    pub const ALL: [Command; 13] = [
         Command::NewHost,
         Command::LocalShell,
         Command::ImportSshConfig,
@@ -120,6 +122,7 @@ impl Command {
         Command::ChangeMaster,
         Command::ToggleBroadcast,
         Command::ToggleSidebar,
+        Command::Theme,
         Command::Help,
         Command::Paths,
         Command::Quit,
@@ -136,6 +139,7 @@ impl Command {
             Command::ChangeMaster => "Change the master password",
             Command::ToggleBroadcast => "Toggle broadcast in this tab",
             Command::ToggleSidebar => "Show/hide the host list",
+            Command::Theme => "Change the theme",
             Command::Help => "Help and key bindings",
             Command::Paths => "Show config and data locations",
             Command::Quit => "Quit",
@@ -248,6 +252,23 @@ impl MoveForm {
                 .hint("Press Enter to pick a folder, or type a new one (a/b for subfolders)"),
         ];
         MoveForm { form: Form::new(title, "Move", fields), what }
+    }
+}
+
+/// Picks a theme; every change is shown at once, Cancel goes back to `previous`.
+pub struct ThemeForm {
+    pub form: Form,
+    pub previous: String,
+}
+
+impl ThemeForm {
+    pub fn new(current: &str) -> Self {
+        let themes = crate::ui::theme::THEMES.iter().map(|t| Choice::new(t.name, t.name, t.description)).collect();
+        let fields = vec![
+            Field::select("theme", "Theme", themes, current)
+                .hint("Enter opens the list; the colors change as you move. Saved to config.toml"),
+        ];
+        ThemeForm { form: Form::new("Theme", "Save", fields), previous: current.to_string() }
     }
 }
 
