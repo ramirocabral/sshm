@@ -204,6 +204,7 @@ Files:
 | `~/.local/share/sshm/hosts.toml` | hosts, no secrets |
 | `~/.local/share/sshm/vault.age` | encrypted vault |
 | `~/.local/state/sshm/sshm.log` | log |
+| `~/.local/state/sshm/state.toml` | which folders were open in the host list |
 | `$XDG_RUNTIME_DIR/sshm/` | sockets; falls back to `/tmp/sshm-<uid>` |
 
 All of them follow the XDG variables.

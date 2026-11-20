@@ -5,7 +5,7 @@ pub mod sftp;
 pub mod sidebar;
 pub mod widgets;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,7 @@ use crate::ssh::askpass::{self, AskPassRequest};
 use crate::ssh::command::{self, AskPassEnv, PromptKind, Purpose, SessionPrompt};
 use crate::store::config::{Config, KeySpec};
 use crate::store::hosts::{HostStore, SecretSource, new_id};
+use crate::store::state::UiState;
 use crate::term::pane::{GridSize, PaneId, PaneNotify, TermPane};
 use dialogs::*;
 use sidebar::Sidebar;
@@ -125,6 +126,8 @@ pub struct App {
     pub dirty: bool,
     pub last_vault_use: Instant,
     pub mouse: input::MouseState,
+    /// Expanded folders as last written to the state file.
+    saved_expanded: HashSet<String>,
     next_id: u64,
 }
 
@@ -132,6 +135,12 @@ impl App {
     pub fn new(cfg: Config, tx: UnboundedSender<AppEvent>, askpass_sock: PathBuf, runtime_dir: PathBuf) -> Result<Self> {
         let store = HostStore::load_default()?;
         let leader = cfg.leader_key();
+        let mut sidebar = Sidebar::default();
+        let mut saved_expanded = HashSet::new();
+        if let Some(expanded) = UiState::load().expanded {
+            saved_expanded = expanded.iter().cloned().collect();
+            sidebar.restore(expanded);
+        }
         Ok(App {
             cfg,
             leader,
@@ -141,7 +150,7 @@ impl App {
             active: 0,
             panes: HashMap::new(),
             focus: Focus::Sidebar,
-            sidebar: Sidebar::default(),
+            sidebar,
             sidebar_visible: true,
             dialogs: VecDeque::new(),
             leader_pending: false,
@@ -157,8 +166,23 @@ impl App {
             dirty: true,
             last_vault_use: Instant::now(),
             mouse: input::MouseState::default(),
+            saved_expanded,
             next_id: 1,
         })
+    }
+
+    /// Writes the UI state when the open folders changed since the last write.
+    pub fn persist_ui_state(&mut self) {
+        if self.sidebar.expanded == self.saved_expanded {
+            return;
+        }
+        self.saved_expanded = self.sidebar.expanded.clone();
+        let folders: HashSet<String> = self.store.folders().into_iter().collect();
+        let mut expanded: Vec<String> = self.saved_expanded.iter().filter(|f| folders.contains(*f)).cloned().collect();
+        expanded.sort();
+        if let Err(e) = (UiState { expanded: Some(expanded) }).save_to(&UiState::path()) {
+            tracing::warn!("could not save the UI state: {e:#}");
+        }
     }
 
     pub fn next_id(&mut self) -> u64 {
@@ -864,6 +888,7 @@ pub async fn run(cfg: Config) -> Result<()> {
                     break;
                 }
             }
+            app.persist_ui_state();
             if app.quit {
                 break;
             }

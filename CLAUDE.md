@@ -77,6 +77,6 @@ injected as raw SGR sequences with `send-keys -l`.
 ## Data
 
 hosts.toml (no secrets) and vault.age in `$XDG_DATA_HOME/sshm`, config.toml in
-`$XDG_CONFIG_HOME/sshm`, log in `$XDG_STATE_HOME/sshm`, sockets in
+`$XDG_CONFIG_HOME/sshm`, log and state.toml (UI state: open folders) in `$XDG_STATE_HOME/sshm`, sockets in
 `$XDG_RUNTIME_DIR/sshm` (fallback `/tmp/sshm-<uid>`, 0700). Writes go through
 `paths::write_private` (tmp + rename, 0600).

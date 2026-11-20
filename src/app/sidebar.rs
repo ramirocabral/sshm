@@ -26,6 +26,12 @@ pub struct Sidebar {
 }
 
 impl Sidebar {
+    /// Starts with the folders that were open last time instead of the whole top level.
+    pub fn restore(&mut self, expanded: Vec<String>) {
+        self.expanded = expanded.into_iter().collect();
+        self.initialized = true;
+    }
+
     pub fn items(&mut self, store: &HostStore) -> Vec<Item> {
         if !self.initialized {
             self.initialized = true;
