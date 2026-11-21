@@ -5,10 +5,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use ratatui::layout::Position;
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
-use russh_sftp::protocol::{Status, StatusCode};
+use russh_sftp::protocol::{FileAttributes, FileType, Status, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -36,6 +38,8 @@ pub struct Panel {
     pub marked: HashSet<String>,
     pub loading: bool,
     pub error: Option<String>,
+    /// Bumped by every listing request; replies to older ones are dropped.
+    request: u64,
 }
 
 impl Panel {
@@ -43,7 +47,12 @@ impl Panel {
         self.entries.get(self.selected)
     }
 
-    fn set_entries(&mut self, mut entries: Vec<Entry>, show_hidden: bool, keep: Option<&str>) {
+    fn set_entries(&mut self, path: String, mut entries: Vec<Entry>, show_hidden: bool, keep: Option<&str>) {
+        if path != self.cwd {
+            self.marked.clear();
+            self.scroll = 0;
+        }
+        self.cwd = path;
         if !show_hidden {
             entries.retain(|e| !e.name.starts_with('.'));
         }
@@ -72,6 +81,8 @@ impl Panel {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransferState {
     Queued,
+    /// Walking the source to find what to copy.
+    Scanning,
     Running,
     Done,
     Failed(String),
@@ -84,7 +95,10 @@ pub struct Transfer {
     pub done: u64,
     pub total: u64,
     pub state: TransferState,
-    pub started: Instant,
+    /// When the first byte was about to move (the speed leaves out the queue and the scan).
+    pub started: Option<Instant>,
+    /// What the transfer left out, e.g. links to folders.
+    pub note: Option<String>,
 }
 
 pub enum Job {
@@ -95,10 +109,11 @@ pub enum Job {
 pub enum SftpEvent {
     Connected { session: Arc<SftpSession>, home: String },
     Failed(String),
-    Listing { path: String, result: Result<Vec<Entry>, String>, keep: Option<String> },
+    Listing { remote: bool, request: u64, path: String, result: Result<Vec<Entry>, String>, keep: Option<String> },
+    Scanning { id: u64 },
     Progress { id: u64, done: u64, total: u64 },
-    TransferDone { id: u64, error: Option<String> },
-    OpDone { result: Result<String, String> },
+    TransferDone { id: u64, error: Option<String>, skipped: Vec<String> },
+    OpDone { remote: bool, result: Result<String, String> },
 }
 
 pub struct SftpView {
@@ -114,6 +129,9 @@ pub struct SftpView {
     pub transfers: Vec<Transfer>,
     pub show_hidden: bool,
     child: Option<tokio::process::Child>,
+    /// Sides that received files since the last refresh; refreshed once the queue drains.
+    stale_local: bool,
+    stale_remote: bool,
 }
 
 impl SftpView {
@@ -123,6 +141,10 @@ impl SftpView {
 
     pub fn panel_mut(&mut self, remote: bool) -> &mut Panel {
         if remote { &mut self.remote } else { &mut self.local }
+    }
+
+    fn pending_transfers(&self) -> bool {
+        self.transfers.iter().any(|t| matches!(t.state, TransferState::Queued | TransferState::Scanning | TransferState::Running))
     }
 }
 
@@ -244,24 +266,193 @@ fn list_local(dir: &str) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
-async fn list_remote(s: &SftpSession, dir: &str) -> Result<Vec<Entry>, String> {
-    let rd = s.read_dir(dir).await.map_err(|e| format!("{dir}: {}", describe(&e)))?;
-    let mut out = Vec::new();
-    for e in rd {
-        let name = e.file_name();
-        if name == "." || name == ".." {
-            continue;
+/// The file type of remote metadata; servers that leave the mode out get "file".
+fn remote_type(m: &FileAttributes) -> FileType {
+    if m.permissions.is_none() { FileType::File } else { m.file_type() }
+}
+
+/// What each symlink among `entries` points to (None for the rest, or when it cannot be resolved).
+async fn stat_links(s: &SftpSession, dir: &str, entries: &[(String, FileAttributes)]) -> Vec<Option<FileAttributes>> {
+    let mut out = vec![None; entries.len()];
+    let mut links = Vec::new();
+    for (i, (name, m)) in entries.iter().enumerate() {
+        if remote_type(m) == FileType::Symlink {
+            links.push((i, join_remote(dir, name)));
         }
-        let meta = e.metadata();
-        let is_link = meta.is_symlink();
-        let mut is_dir = meta.is_dir();
-        if is_link
-            && let Ok(m) = s.metadata(join_remote(dir, &name)).await {
-                is_dir = m.is_dir();
-            }
-        out.push(Entry { name, is_dir, is_link, size: meta.size.unwrap_or(0), mtime: meta.mtime.map(u64::from) });
     }
-    Ok(out)
+    let mut links = links.into_iter();
+    let mut running = FuturesUnordered::new();
+    loop {
+        while running.len() < 16 {
+            let Some((i, path)) = links.next() else { break };
+            running.push(async move { (i, s.metadata(path).await.ok()) });
+        }
+        let Some((i, m)) = running.next().await else { break };
+        out[i] = m;
+    }
+    out
+}
+
+/// Directory contents with their lstat metadata, without "." and "..".
+async fn read_remote_dir(s: &SftpSession, dir: &str) -> Result<Vec<(String, FileAttributes)>, String> {
+    let rd = s.read_dir(dir).await.map_err(|e| format!("{dir}: {}", describe(&e)))?;
+    Ok(rd.map(|e| (e.file_name(), e.metadata())).filter(|(name, _)| name != "." && name != "..").collect())
+}
+
+async fn list_remote(s: &SftpSession, dir: &str) -> Result<Vec<Entry>, String> {
+    let raw = read_remote_dir(s, dir).await?;
+    let targets = stat_links(s, dir, &raw).await;
+    Ok(raw
+        .into_iter()
+        .zip(targets)
+        .map(|((name, meta), target)| {
+            let is_link = remote_type(&meta) == FileType::Symlink;
+            let shown = target.as_ref().unwrap_or(&meta);
+            let is_dir = remote_type(shown) == FileType::Dir;
+            Entry { name, is_dir, is_link, size: shown.size.unwrap_or(0), mtime: meta.mtime.map(u64::from) }
+        })
+        .collect())
+}
+
+/// One item found while planning a transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    File(u64),
+    Dir,
+    LinkToFile(u64),
+    LinkToDir,
+    BrokenLink,
+    Other,
+}
+
+fn local_kind(path: &Path, ft: std::fs::FileType) -> Kind {
+    if ft.is_symlink() {
+        return match std::fs::metadata(path) {
+            Ok(m) if m.is_file() => Kind::LinkToFile(m.len()),
+            Ok(m) if m.is_dir() => Kind::LinkToDir,
+            Ok(_) => Kind::Other,
+            Err(_) => Kind::BrokenLink,
+        };
+    }
+    if ft.is_dir() {
+        Kind::Dir
+    } else if ft.is_file() {
+        std::fs::symlink_metadata(path).map(|m| Kind::File(m.len())).unwrap_or(Kind::BrokenLink)
+    } else {
+        Kind::Other
+    }
+}
+
+/// `lstat` is what the directory listing reported; `target` is the stat of a symlink.
+fn remote_kind(lstat: &FileAttributes, target: Option<&FileAttributes>) -> Kind {
+    match remote_type(lstat) {
+        FileType::Dir => Kind::Dir,
+        FileType::File => Kind::File(lstat.size.unwrap_or(0)),
+        FileType::Other => Kind::Other,
+        FileType::Symlink => match target.map(remote_type) {
+            Some(FileType::File) => Kind::LinkToFile(target.and_then(|t| t.size).unwrap_or(0)),
+            Some(FileType::Dir) => Kind::LinkToDir,
+            Some(_) => Kind::Other,
+            None => Kind::BrokenLink,
+        },
+    }
+}
+
+/// What a transfer copies, worked out before the first byte moves: folders to create (parents
+/// first) and files with their sizes. The selected item is followed if it is a link; below it,
+/// links to files are copied as files and links to folders are skipped, so nothing loops.
+#[derive(Debug, PartialEq)]
+struct Plan<S, D> {
+    dirs: Vec<D>,
+    files: Vec<(S, D, u64)>,
+    skipped: Vec<String>,
+    total: u64,
+}
+
+impl<S, D> Plan<S, D> {
+    fn new() -> Self {
+        Plan { dirs: Vec::new(), files: Vec::new(), skipped: Vec::new(), total: 0 }
+    }
+
+    /// Records one item (`rel` names it in the report); a folder is handed back to walk into.
+    fn add(&mut self, kind: Kind, src: S, dst: D, rel: &str) -> Option<(S, D)> {
+        match kind {
+            Kind::File(n) | Kind::LinkToFile(n) => {
+                self.files.push((src, dst, n));
+                self.total += n;
+            }
+            Kind::Dir => return Some((src, dst)),
+            Kind::LinkToDir => self.skipped.push(format!("{rel}/ (link to a folder)")),
+            Kind::BrokenLink => self.skipped.push(format!("{rel} (broken link)")),
+            Kind::Other => self.skipped.push(format!("{rel} (not a regular file)")),
+        }
+        None
+    }
+}
+
+fn base_name(path: &str) -> String {
+    path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
+}
+
+/// Blocking: call it through spawn_blocking.
+fn plan_upload(local: &Path, remote: &str) -> Result<Plan<PathBuf, String>, String> {
+    let meta = std::fs::metadata(local).map_err(|e| format!("{}: {e}", local.display()))?;
+    let mut plan = Plan::new();
+    if meta.is_file() {
+        plan.add(Kind::File(meta.len()), local.to_path_buf(), remote.to_string(), "");
+        return Ok(plan);
+    }
+    if !meta.is_dir() {
+        return Err(format!("{}: not a regular file or folder", local.display()));
+    }
+    let mut stack = vec![(local.to_path_buf(), remote.to_string(), base_name(&local.to_string_lossy()))];
+    while let Some((dir, rdir, rel)) = stack.pop() {
+        let mut entries: Vec<_> = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        plan.dirs.push(rdir.clone());
+        let mut subdirs = Vec::new();
+        for e in entries {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let path = e.path();
+            let kind = e.file_type().map(|ft| local_kind(&path, ft)).unwrap_or(Kind::BrokenLink);
+            let child_rel = format!("{rel}/{name}");
+            if let Some((src, dst)) = plan.add(kind, path, join_remote(&rdir, &name), &child_rel) {
+                subdirs.push((src, dst, child_rel));
+            }
+        }
+        stack.extend(subdirs.into_iter().rev());
+    }
+    Ok(plan)
+}
+
+async fn plan_download(s: &SftpSession, remote: &str, local: &Path) -> Result<Plan<String, PathBuf>, String> {
+    let meta = s.metadata(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
+    let mut plan = Plan::new();
+    match remote_type(&meta) {
+        FileType::File => {
+            plan.add(Kind::File(meta.size.unwrap_or(0)), remote.to_string(), local.to_path_buf(), "");
+            return Ok(plan);
+        }
+        FileType::Dir => {}
+        _ => return Err(format!("{remote}: not a regular file or folder")),
+    }
+    let mut stack = vec![(remote.to_string(), local.to_path_buf(), base_name(remote))];
+    while let Some((dir, ldir, rel)) = stack.pop() {
+        let mut entries = read_remote_dir(s, &dir).await?;
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let targets = stat_links(s, &dir, &entries).await;
+        plan.dirs.push(ldir.clone());
+        let mut subdirs = Vec::new();
+        for ((name, lstat), target) in entries.into_iter().zip(targets) {
+            let child_rel = format!("{rel}/{name}");
+            let kind = remote_kind(&lstat, target.as_ref());
+            if let Some((src, dst)) = plan.add(kind, join_remote(&dir, &name), ldir.join(&name), &child_rel) {
+                subdirs.push((src, dst, child_rel));
+            }
+        }
+        stack.extend(subdirs.into_iter().rev());
+    }
+    Ok(plan)
 }
 
 fn send(tx: &UnboundedSender<AppEvent>, tab: u64, ev: SftpEvent) {
@@ -288,7 +479,7 @@ impl App {
             host_id: host.id.clone(),
             name: host.name.clone(),
             token,
-            local: Panel { cwd: home.clone(), ..Panel::default() },
+            local: Panel { cwd: home, loading: true, ..Panel::default() },
             remote: Panel { cwd: String::new(), loading: true, ..Panel::default() },
             remote_active: true,
             session: None,
@@ -297,11 +488,9 @@ impl App {
             transfers: Vec::new(),
             show_hidden: false,
             child: None,
+            stale_local: false,
+            stale_remote: false,
         };
-        match list_local(&home) {
-            Ok(e) => view.local.set_entries(e, false, None),
-            Err(e) => view.local.error = Some(e),
-        }
 
         match cmd.spawn() {
             Ok(mut child) => {
@@ -343,6 +532,7 @@ impl App {
         self.tabs.push(Tab { id: tab_id, title: None, kind: TabKind::Sftp(Box::new(view)) });
         self.active = self.tabs.len() - 1;
         self.focus = Focus::Main;
+        self.sftp_refresh(tab_id, false, None);
     }
 
     fn sftp_view(&mut self, tab: u64) -> Option<&mut SftpView> {
@@ -368,7 +558,7 @@ impl App {
             SftpEvent::Connected { session, home } => {
                 view.status = format!("Connected to {}", view.name);
                 view.session = Some(session.clone());
-                view.remote.cwd = home.clone();
+                view.remote.cwd = home;
                 let (jtx, mut jrx) = unbounded_channel::<Job>();
                 view.jobs = Some(jtx);
                 let worker_tx = tx.clone();
@@ -379,7 +569,11 @@ impl App {
                             Job::Upload { id, local, remote } => (id, upload(&worker_session, &local, &remote, id, tab, &worker_tx).await),
                             Job::Download { id, remote, local } => (id, download(&worker_session, &remote, &local, id, tab, &worker_tx).await),
                         };
-                        send(&worker_tx, tab, SftpEvent::TransferDone { id, error: result.err() });
+                        let (error, skipped) = match result {
+                            Ok(skipped) => (None, skipped),
+                            Err(e) => (Some(e), Vec::new()),
+                        };
+                        send(&worker_tx, tab, SftpEvent::TransferDone { id, error, skipped });
                     }
                 });
                 self.sftp_refresh(tab, true, None);
@@ -389,17 +583,26 @@ impl App {
                 view.remote.loading = false;
                 view.remote.error = Some(msg);
             }
-            SftpEvent::Listing { path, result, keep } => {
+            SftpEvent::Listing { remote, request, path, result, keep } => {
                 let show_hidden = view.show_hidden;
+                let panel = view.panel_mut(remote);
+                if request != panel.request {
+                    return;
+                }
                 match result {
-                    Ok(entries) => {
-                        view.remote.cwd = path;
-                        view.remote.set_entries(entries, show_hidden, keep.as_deref());
-                    }
+                    Ok(entries) => panel.set_entries(path, entries, show_hidden, keep.as_deref()),
                     Err(e) => {
-                        view.remote.loading = false;
+                        panel.loading = false;
+                        if panel.entries.is_empty() {
+                            panel.error = Some(e.clone());
+                        }
                         view.status = format!("Error: {e}");
                     }
+                }
+            }
+            SftpEvent::Scanning { id } => {
+                if let Some(t) = view.transfers.iter_mut().find(|t| t.id == id) {
+                    t.state = TransferState::Scanning;
                 }
             }
             SftpEvent::Progress { id, done, total } => {
@@ -407,12 +610,11 @@ impl App {
                     t.done = done;
                     t.total = total;
                     t.state = TransferState::Running;
+                    t.started.get_or_insert_with(Instant::now);
                 }
             }
-            SftpEvent::TransferDone { id, error } => {
-                let mut upload = false;
+            SftpEvent::TransferDone { id, error, skipped } => {
                 if let Some(t) = view.transfers.iter_mut().find(|t| t.id == id) {
-                    upload = t.upload;
                     t.state = match &error {
                         Some(e) => TransferState::Failed(e.clone()),
                         None => {
@@ -420,48 +622,77 @@ impl App {
                             TransferState::Done
                         }
                     };
+                    if !skipped.is_empty() {
+                        t.note = Some(format!("skipped {}: {}", skipped.len(), skipped.join(", ")));
+                    }
+                    if t.upload {
+                        view.stale_remote = true;
+                    } else {
+                        view.stale_local = true;
+                    }
                 }
-                let pending = view.transfers.iter().any(|t| matches!(t.state, TransferState::Queued | TransferState::Running));
+                let pending = view.pending_transfers();
                 if let Some(e) = error {
                     view.status = format!("Transfer failed: {e}");
+                } else if !skipped.is_empty() {
+                    view.status = format!("Skipped {}: {}", skipped.len(), skipped.join(", "));
                 } else if !pending {
                     view.status = "Transfers finished".into();
                 }
-                if upload {
-                    self.sftp_refresh(tab, true, None);
-                } else {
-                    self.sftp_refresh(tab, false, None);
+                if !pending {
+                    let remote = std::mem::take(&mut view.stale_remote);
+                    let local = std::mem::take(&mut view.stale_local);
+                    if remote {
+                        self.sftp_refresh(tab, true, None);
+                    }
+                    if local {
+                        self.sftp_refresh(tab, false, None);
+                    }
                 }
             }
-            SftpEvent::OpDone { result } => {
+            SftpEvent::OpDone { remote, result } => {
                 match result {
                     Ok(msg) => view.status = msg,
                     Err(e) => view.status = format!("Error: {e}"),
                 }
-                self.sftp_refresh(tab, true, None);
-                self.sftp_refresh(tab, false, None);
+                self.sftp_refresh(tab, remote, None);
             }
         }
     }
 
+    /// Lists the current folder of one side again, keeping the cursor on the same name.
     pub fn sftp_refresh(&mut self, tab: u64, remote: bool, keep: Option<String>) {
+        let Some(view) = self.sftp_view(tab) else { return };
+        let panel = view.panel(remote);
+        let keep = keep.or_else(|| panel.current().map(|e| e.name.clone()));
+        let path = panel.cwd.clone();
+        self.sftp_list(tab, remote, path, keep);
+    }
+
+    /// Lists `path` in the background; the panel moves there once the listing arrives.
+    fn sftp_list(&mut self, tab: u64, remote: bool, path: String, keep: Option<String>) {
         let tx = self.tx.clone();
         let Some(view) = self.sftp_view(tab) else { return };
-        if remote {
-            let Some(session) = view.session.clone() else { return };
-            let path = view.remote.cwd.clone();
-            let keep = keep.or_else(|| view.remote.current().map(|e| e.name.clone()));
-            view.remote.loading = true;
-            tokio::spawn(async move {
-                let result = list_remote(&session, &path).await;
-                send(&tx, tab, SftpEvent::Listing { path, result, keep });
-            });
-        } else {
-            let keep = keep.or_else(|| view.local.current().map(|e| e.name.clone()));
-            let show_hidden = view.show_hidden;
-            match list_local(&view.local.cwd) {
-                Ok(e) => view.local.set_entries(e, show_hidden, keep.as_deref()),
-                Err(e) => view.status = format!("Error: {e}"),
+        let session = view.session.clone();
+        if remote && session.is_none() {
+            return;
+        }
+        let panel = view.panel_mut(remote);
+        panel.request += 1;
+        panel.loading = true;
+        let request = panel.request;
+        match session.filter(|_| remote) {
+            Some(session) => {
+                tokio::spawn(async move {
+                    let result = list_remote(&session, &path).await;
+                    send(&tx, tab, SftpEvent::Listing { remote, request, path, result, keep });
+                });
+            }
+            None => {
+                tokio::task::spawn_blocking(move || {
+                    let result = list_local(&path);
+                    send(&tx, tab, SftpEvent::Listing { remote, request, path, result, keep });
+                });
             }
         }
     }
@@ -486,11 +717,7 @@ impl App {
             };
             p.to_string_lossy().into_owned()
         };
-        let panel = view.panel_mut(remote);
-        panel.cwd = new_cwd;
-        panel.marked.clear();
-        panel.selected = 0;
-        self.sftp_refresh(tab, remote, came_from);
+        self.sftp_list(tab, remote, new_cwd, came_from);
     }
 
     fn sftp_up(&mut self, tab: u64) {
@@ -510,10 +737,8 @@ impl App {
         if path.is_empty() {
             return;
         }
-        let Some(view) = self.sftp_view(tab) else { return };
         let path = if remote { path } else { crate::paths::expand_tilde(&path).to_string_lossy().into_owned() };
-        view.panel_mut(remote).cwd = path;
-        self.sftp_refresh(tab, remote, None);
+        self.sftp_list(tab, remote, path, None);
     }
 
     pub fn sftp_key(&mut self, key: KeyEvent) {
@@ -602,7 +827,7 @@ impl App {
                     action: Some(InputAction::SftpGoto { tab, remote }),
                 }));
             }
-            KeyCode::Char('x') => view.transfers.retain(|t| matches!(t.state, TransferState::Queued | TransferState::Running)),
+            KeyCode::Char('x') => view.transfers.retain(|t| matches!(t.state, TransferState::Queued | TransferState::Scanning | TransferState::Running)),
             KeyCode::Char('q') | KeyCode::Esc => {
                 if !view.panel(remote).marked.is_empty() {
                     view.panel_mut(remote).marked.clear();
@@ -656,7 +881,8 @@ impl App {
                 done: 0,
                 total: 0,
                 state: TransferState::Queued,
-                started: Instant::now(),
+                started: None,
+                note: None,
             });
             let job = if upload { Job::Upload { id, local, remote } } else { Job::Download { id, remote, local } };
             let _ = jobs.send(job);
@@ -681,12 +907,14 @@ impl App {
                     Ok(_) => Ok(format!("Folder created: {path}")),
                     Err(e) => Err(format!("{path}: {}", write_error(&s, &cwd, e).await)),
                 };
-                send(&tx, tab, SftpEvent::OpDone { result });
+                send(&tx, tab, SftpEvent::OpDone { remote, result });
             });
         } else {
             let path = Path::new(&view.local.cwd).join(&name);
-            let result = std::fs::create_dir_all(&path).map(|_| format!("Folder created: {}", path.display())).map_err(|e| e.to_string());
-            send(&tx, tab, SftpEvent::OpDone { result });
+            tokio::task::spawn_blocking(move || {
+                let result = std::fs::create_dir_all(&path).map(|_| format!("Folder created: {}", path.display())).map_err(|e| e.to_string());
+                send(&tx, tab, SftpEvent::OpDone { remote, result });
+            });
         }
     }
 
@@ -706,13 +934,15 @@ impl App {
                     Ok(_) => Ok(format!("Renamed to {b}")),
                     Err(e) => Err(format!("{a}: {}", write_error(&s, &cwd, e).await)),
                 };
-                send(&tx, tab, SftpEvent::OpDone { result });
+                send(&tx, tab, SftpEvent::OpDone { remote, result });
             });
         } else {
             let a = Path::new(&view.local.cwd).join(&from);
             let b = Path::new(&view.local.cwd).join(&to);
-            let result = std::fs::rename(&a, &b).map(|_| format!("Renamed to {}", b.display())).map_err(|e| e.to_string());
-            send(&tx, tab, SftpEvent::OpDone { result });
+            tokio::task::spawn_blocking(move || {
+                let result = std::fs::rename(&a, &b).map(|_| format!("Renamed to {}", b.display())).map_err(|e| e.to_string());
+                send(&tx, tab, SftpEvent::OpDone { remote, result });
+            });
         }
     }
 
@@ -730,19 +960,22 @@ impl App {
                     }
                 }
                 let result = if errors.is_empty() { Ok(format!("Deleted: {}", names.len())) } else { Err(errors.join("; ")) };
-                send(&tx, tab, SftpEvent::OpDone { result });
+                send(&tx, tab, SftpEvent::OpDone { remote, result });
             });
         } else {
-            let mut errors = Vec::new();
-            for n in &names {
-                let p = Path::new(&view.local.cwd).join(n);
-                let r = if p.is_dir() && !p.is_symlink() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
-                if let Err(e) = r {
-                    errors.push(format!("{n}: {e}"));
+            let cwd = PathBuf::from(&view.local.cwd);
+            tokio::task::spawn_blocking(move || {
+                let mut errors = Vec::new();
+                for n in &names {
+                    let p = cwd.join(n);
+                    let r = if p.is_dir() && !p.is_symlink() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+                    if let Err(e) = r {
+                        errors.push(format!("{n}: {e}"));
+                    }
                 }
-            }
-            let result = if errors.is_empty() { Ok(format!("Deleted: {}", names.len())) } else { Err(errors.join("; ")) };
-            send(&tx, tab, SftpEvent::OpDone { result });
+                let result = if errors.is_empty() { Ok(format!("Deleted: {}", names.len())) } else { Err(errors.join("; ")) };
+                send(&tx, tab, SftpEvent::OpDone { remote, result });
+            });
         }
     }
 
@@ -779,13 +1012,8 @@ impl App {
 fn remove_remote<'a>(s: &'a SftpSession, path: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
         let meta = s.symlink_metadata(path).await.map_err(|e| describe(&e))?;
-        let removed = if meta.is_dir() {
-            let entries = s.read_dir(path).await.map_err(|e| describe(&e))?;
-            for e in entries {
-                let name = e.file_name();
-                if name == "." || name == ".." {
-                    continue;
-                }
+        let removed = if remote_type(&meta) == FileType::Dir {
+            for (name, _) in read_remote_dir(s, path).await? {
                 remove_remote(s, &join_remote(path, &name)).await?;
             }
             s.remove_dir(path).await
@@ -809,6 +1037,11 @@ struct Progress<'a> {
 }
 
 impl Progress<'_> {
+    fn start(tx: &UnboundedSender<AppEvent>, tab: u64, id: u64, total: u64) -> Progress<'_> {
+        send(tx, tab, SftpEvent::Progress { id, done: 0, total });
+        Progress { tx, tab, id, done: 0, total, last: Instant::now() }
+    }
+
     fn add(&mut self, n: u64) {
         self.done += n;
         if self.last.elapsed() > Duration::from_millis(150) {
@@ -818,137 +1051,99 @@ impl Progress<'_> {
     }
 }
 
-fn local_size(p: &Path) -> u64 {
-    match std::fs::symlink_metadata(p) {
-        Ok(m) if m.is_dir() => std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| local_size(&e.path())).sum()).unwrap_or(0),
-        Ok(m) => m.len(),
-        Err(_) => 0,
+/// Returns what was skipped (links to folders, special files).
+async fn upload(s: &SftpSession, local: &Path, remote: &str, id: u64, tab: u64, tx: &UnboundedSender<AppEvent>) -> Result<Vec<String>, String> {
+    send(tx, tab, SftpEvent::Scanning { id });
+    let (l, r) = (local.to_path_buf(), remote.to_string());
+    let plan = tokio::task::spawn_blocking(move || plan_upload(&l, &r)).await.map_err(|e| e.to_string())??;
+    let mut prog = Progress::start(tx, tab, id, plan.total);
+    for dir in &plan.dirs {
+        ensure_remote_dir(s, dir).await?;
+    }
+    for (src, dst, _) in &plan.files {
+        upload_file(s, src, dst, &mut prog).await?;
+    }
+    Ok(plan.skipped)
+}
+
+/// Creates `dir` unless a folder is already there.
+async fn ensure_remote_dir(s: &SftpSession, dir: &str) -> Result<(), String> {
+    let Err(e) = s.create_dir(dir).await else { return Ok(()) };
+    match s.metadata(dir).await {
+        Ok(m) if remote_type(&m) == FileType::Dir => Ok(()),
+        _ => Err(format!("{dir}: {}", write_error(s, &parent_remote(dir), e).await)),
     }
 }
 
-async fn upload(s: &SftpSession, local: &Path, remote: &str, id: u64, tab: u64, tx: &UnboundedSender<AppEvent>) -> Result<(), String> {
-    let total = local_size(local);
-    let mut prog = Progress { tx, tab, id, done: 0, total, last: Instant::now() };
-    send(tx, tab, SftpEvent::Progress { id, done: 0, total });
-    upload_rec(s, local, remote, &mut prog).await
+async fn upload_file(s: &SftpSession, local: &Path, remote: &str, prog: &mut Progress<'_>) -> Result<(), String> {
+    let parent = parent_remote(remote);
+    let mut src = tokio::fs::File::open(local).await.map_err(|e| format!("{}: {e}", local.display()))?;
+    let mut dst = match s.create(remote).await {
+        Ok(f) => f,
+        Err(e) => return Err(format!("{remote}: {}", write_error(s, &parent, e).await)),
+    };
+    let mut buf = vec![0u8; 128 * 1024];
+    loop {
+        let n = src.read(&mut buf).await.map_err(|e| format!("{}: {e}", local.display()))?;
+        if n == 0 {
+            break;
+        }
+        if let Err(e) = dst.write_all(&buf[..n]).await {
+            return Err(format!("{remote}: {}", io_error(s, &parent, e).await));
+        }
+        prog.add(n as u64);
+    }
+    if let Err(e) = dst.shutdown().await {
+        return Err(format!("{remote}: {}", io_error(s, &parent, e).await));
+    }
+    Ok(())
 }
 
-fn upload_rec<'a>(
-    s: &'a SftpSession,
-    local: &'a Path,
-    remote: &'a str,
-    prog: &'a mut Progress<'_>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-    Box::pin(async move {
-        let meta = std::fs::metadata(local).map_err(|e| format!("{}: {e}", local.display()))?;
-        let parent = parent_remote(remote);
-        if meta.is_dir() {
-            if !s.try_exists(remote).await.unwrap_or(false)
-                && let Err(e) = s.create_dir(remote).await
-            {
-                return Err(format!("{remote}: {}", write_error(s, &parent, e).await));
-            }
-            let entries: Vec<_> = std::fs::read_dir(local).map_err(|e| e.to_string())?.flatten().collect();
-            for e in entries {
-                let name = e.file_name().to_string_lossy().into_owned();
-                upload_rec(s, &e.path(), &join_remote(remote, &name), prog).await?;
-            }
-            return Ok(());
-        }
-        let mut src = tokio::fs::File::open(local).await.map_err(|e| format!("{}: {e}", local.display()))?;
-        let mut dst = match s.create(remote).await {
-            Ok(f) => f,
-            Err(e) => return Err(format!("{remote}: {}", write_error(s, &parent, e).await)),
-        };
+/// Returns what was skipped (links to folders, special files).
+async fn download(s: &SftpSession, remote: &str, local: &Path, id: u64, tab: u64, tx: &UnboundedSender<AppEvent>) -> Result<Vec<String>, String> {
+    send(tx, tab, SftpEvent::Scanning { id });
+    let plan = plan_download(s, remote, local).await?;
+    let mut prog = Progress::start(tx, tab, id, plan.total);
+    for dir in &plan.dirs {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    for (src, dst, _) in &plan.files {
+        download_file(s, src, dst, &mut prog).await?;
+    }
+    Ok(plan.skipped)
+}
+
+/// Where a download is written until it is complete: `<name>.sshm-part` next to it.
+fn part_path(local: &Path) -> PathBuf {
+    let mut name = local.file_name().unwrap_or_default().to_os_string();
+    name.push(".sshm-part");
+    local.with_file_name(name)
+}
+
+async fn download_file(s: &SftpSession, remote: &str, local: &Path, prog: &mut Progress<'_>) -> Result<(), String> {
+    let mut src = s.open(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
+    let tmp = part_path(local);
+    let mut dst = tokio::fs::File::create(&tmp).await.map_err(|e| format!("{}: {e}", local.display()))?;
+    let copied = async {
         let mut buf = vec![0u8; 128 * 1024];
         loop {
-            let n = src.read(&mut buf).await.map_err(|e| e.to_string())?;
+            let n = src.read(&mut buf).await.map_err(|e| format!("{remote}: {}", describe_io(&e)))?;
             if n == 0 {
                 break;
             }
-            if let Err(e) = dst.write_all(&buf[..n]).await {
-                return Err(format!("{remote}: {}", io_error(s, &parent, e).await));
-            }
+            dst.write_all(&buf[..n]).await.map_err(|e| format!("{}: {e}", local.display()))?;
             prog.add(n as u64);
         }
-        if let Err(e) = dst.shutdown().await {
-            return Err(format!("{remote}: {}", io_error(s, &parent, e).await));
-        }
-        Ok(())
-    })
-}
-
-fn remote_size<'a>(s: &'a SftpSession, path: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = u64> + Send + 'a>> {
-    Box::pin(async move {
-        let Ok(meta) = s.metadata(path).await else { return 0 };
-        if !meta.is_dir() {
-            return meta.size.unwrap_or(0);
-        }
-        let Ok(rd) = s.read_dir(path).await else { return 0 };
-        let mut total = 0;
-        for e in rd {
-            let name = e.file_name();
-            if name == "." || name == ".." {
-                continue;
-            }
-            if e.metadata().is_dir() {
-                total += remote_size(s, &join_remote(path, &name)).await;
-            } else {
-                total += e.metadata().size.unwrap_or(0);
-            }
-        }
-        total
-    })
-}
-
-async fn download(s: &SftpSession, remote: &str, local: &Path, id: u64, tab: u64, tx: &UnboundedSender<AppEvent>) -> Result<(), String> {
-    let total = remote_size(s, remote).await;
-    let mut prog = Progress { tx, tab, id, done: 0, total, last: Instant::now() };
-    send(tx, tab, SftpEvent::Progress { id, done: 0, total });
-    download_rec(s, remote, local, &mut prog).await
-}
-
-fn download_rec<'a>(
-    s: &'a SftpSession,
-    remote: &'a str,
-    local: &'a Path,
-    prog: &'a mut Progress<'_>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-    Box::pin(async move {
-        let meta = s.metadata(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
-        if meta.is_dir() {
-            std::fs::create_dir_all(local).map_err(|e| format!("{}: {e}", local.display()))?;
-            let rd = s.read_dir(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
-            let names: Vec<String> = rd.map(|e| e.file_name()).filter(|n| n != "." && n != "..").collect();
-            for name in names {
-                download_rec(s, &join_remote(remote, &name), &local.join(&name), prog).await?;
-            }
-            return Ok(());
-        }
-        let mut src = s.open(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
-        let tmp = local.with_extension("sshm-part");
-        let mut dst = tokio::fs::File::create(&tmp).await.map_err(|e| format!("{}: {e}", local.display()))?;
-        let copied = async {
-            let mut buf = vec![0u8; 128 * 1024];
-            loop {
-                let n = src.read(&mut buf).await.map_err(|e| format!("{remote}: {}", describe_io(&e)))?;
-                if n == 0 {
-                    break;
-                }
-                dst.write_all(&buf[..n]).await.map_err(|e| format!("{}: {e}", local.display()))?;
-                prog.add(n as u64);
-            }
-            dst.flush().await.map_err(|e| format!("{}: {e}", local.display()))
-        }
-        .await;
-        drop(dst);
-        if let Err(e) = copied {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            return Err(e);
-        }
-        tokio::fs::rename(&tmp, local).await.map_err(|e| format!("{}: {e}", local.display()))?;
-        Ok(())
-    })
+        dst.flush().await.map_err(|e| format!("{}: {e}", local.display()))
+    }
+    .await;
+    drop(dst);
+    if let Err(e) = copied {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    tokio::fs::rename(&tmp, local).await.map_err(|e| format!("{}: {e}", local.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -980,5 +1175,93 @@ mod tests {
         assert_eq!(describe_io(&wrapped), "permission denied");
         assert_eq!(describe_io(&std::io::Error::other("Failure")), "the server refused without giving a reason");
         assert_eq!(describe_io(&std::io::Error::other("file size unknown")), "file size unknown");
+    }
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!("sshm-sftp-{}", new_id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// root/ a.txt (3) · link.txt → a.txt · broken → nowhere · sock · sub/ b.txt (5) · sub/loop → ..
+    fn sample_tree() -> (TempDir, PathBuf) {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new();
+        let root = tmp.0.join("root");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.txt"), "abc").unwrap();
+        std::fs::write(root.join("sub/b.txt"), "hello").unwrap();
+        symlink("a.txt", root.join("link.txt")).unwrap();
+        symlink("nowhere", root.join("broken")).unwrap();
+        symlink("..", root.join("sub/loop")).unwrap();
+        std::os::unix::net::UnixListener::bind(root.join("sock")).unwrap();
+        (tmp, root)
+    }
+
+    #[test]
+    fn upload_plan_skips_links_to_folders() {
+        let (_tmp, root) = sample_tree();
+        let plan = plan_upload(&root, "/r").unwrap();
+        assert_eq!(plan.dirs, ["/r", "/r/sub"]);
+        let files: Vec<(&str, u64)> = plan.files.iter().map(|(_, d, n)| (d.as_str(), *n)).collect();
+        assert_eq!(files, [("/r/a.txt", 3), ("/r/link.txt", 3), ("/r/sub/b.txt", 5)]);
+        assert_eq!(plan.total, 11);
+        assert_eq!(plan.skipped, ["root/broken (broken link)", "root/sock (not a regular file)", "root/sub/loop/ (link to a folder)"]);
+    }
+
+    #[test]
+    fn a_selected_link_is_followed_once() {
+        let (_tmp, root) = sample_tree();
+        let plan = plan_upload(&root.join("sub/loop"), "/x").unwrap();
+        assert_eq!(plan.dirs, ["/x", "/x/sub"]);
+        assert_eq!(plan.total, 11);
+        assert!(plan.skipped.contains(&"loop/sub/loop/ (link to a folder)".to_string()));
+
+        let single = plan_upload(&root.join("link.txt"), "/y.txt").unwrap();
+        assert_eq!((single.dirs.len(), single.total), (0, 3));
+        assert!(plan_upload(&root.join("sock"), "/z").is_err());
+    }
+
+    #[test]
+    fn remote_kinds() {
+        let attrs = |mode: Option<u32>, size: u64| FileAttributes { permissions: mode, size: Some(size), ..FileAttributes::default() };
+        let (file, dir, link, sock) = (attrs(Some(0o100644), 7), attrs(Some(0o040755), 0), attrs(Some(0o120777), 3), attrs(Some(0o140755), 0));
+        assert_eq!(remote_kind(&file, None), Kind::File(7));
+        assert_eq!(remote_kind(&dir, None), Kind::Dir);
+        assert_eq!(remote_kind(&sock, None), Kind::Other);
+        assert_eq!(remote_kind(&link, Some(&file)), Kind::LinkToFile(7));
+        assert_eq!(remote_kind(&link, Some(&dir)), Kind::LinkToDir);
+        assert_eq!(remote_kind(&link, None), Kind::BrokenLink);
+        assert_eq!(remote_kind(&attrs(None, 9), None), Kind::File(9));
+    }
+
+    #[test]
+    fn part_file_keeps_the_whole_name() {
+        assert_eq!(part_path(Path::new("/d/a.tar.gz")), Path::new("/d/a.tar.gz.sshm-part"));
+        assert_eq!(part_path(Path::new("/d/.bashrc")), Path::new("/d/.bashrc.sshm-part"));
+    }
+
+    #[test]
+    fn listing_another_folder_drops_the_marks() {
+        let entry = |name: &str| Entry { name: name.into(), is_dir: false, is_link: false, size: 0, mtime: None };
+        let mut p = Panel { cwd: "/a".into(), ..Panel::default() };
+        p.set_entries("/a".into(), vec![entry("x"), entry("y")], false, None);
+        p.marked.insert("x".into());
+        p.set_entries("/a".into(), vec![entry("x"), entry("y")], false, Some("y"));
+        assert!(p.marked.contains("x"));
+        assert_eq!(p.current().map(|e| e.name.as_str()), Some("y"));
+        p.set_entries("/b".into(), vec![entry("x")], false, None);
+        assert!(p.marked.is_empty());
+        assert_eq!((p.cwd.as_str(), p.selected), ("/b", 0));
     }
 }

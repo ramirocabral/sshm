@@ -51,8 +51,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     let mut rects = Vec::new();
     let remote_active = view.remote_active;
-    let remote_title = format!(" {} : {} ", view.name, view.remote.cwd);
-    let local_title = format!(" local : {} ", view.local.cwd);
+    let busy = |p: &Panel| if p.loading && !p.entries.is_empty() { " …" } else { "" };
+    let remote_title = format!(" {} : {}{} ", view.name, view.remote.cwd, busy(&view.remote));
+    let local_title = format!(" local : {}{} ", view.local.cwd, busy(&view.local));
     rects.push((false, draw_panel(f, &mut view.local, left, &local_title, focused && !remote_active)));
     rects.push((true, draw_panel(f, &mut view.remote, right, &remote_title, focused && remote_active)));
 
@@ -65,11 +66,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             let arrow = if t.upload { "↑" } else { "↓" };
             let (state, color) = match &t.state {
                 TransferState::Queued => ("queued".to_string(), colors().subtle),
+                TransferState::Scanning => ("scanning…".to_string(), colors().subtle),
                 TransferState::Running => {
-                    let secs = t.started.elapsed().as_secs_f64().max(0.1);
+                    let secs = t.started.map_or(0.0, |s| s.elapsed().as_secs_f64()).max(0.1);
                     (format!("{}/s", human((t.done as f64 / secs) as u64)), colors().accent)
                 }
-                TransferState::Done => ("done".to_string(), colors().success),
+                TransferState::Done => (t.note.as_ref().map_or_else(|| "done".to_string(), |n| format!("done · {n}")), colors().success),
                 TransferState::Failed(e) => {
                     let label = format!("{arrow} {} · failed: {e}", t.label);
                     f.buffer_mut().set_stringn(row.x, row.y, &label, row.width as usize, Style::default().fg(colors().error));
