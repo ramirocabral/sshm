@@ -318,7 +318,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     if let Some(t) = app.active_term_tab()
         && t.broadcast {
             let n = t.panes.iter().filter(|p| app.panes.get(p).is_some_and(|p| !p.excluded)).count();
-            spans.push(Span::styled(format!(" colors().broadcast {n} "), Style::default().fg(colors().text).bg(colors().broadcast).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(format!(" BROADCAST {n} "), Style::default().fg(colors().text).bg(colors().broadcast).add_modifier(Modifier::BOLD)));
             spans.push(Span::raw(" "));
         }
     let sidebar_visual = app.focus == Focus::Sidebar && app.sidebar.visual.is_some();

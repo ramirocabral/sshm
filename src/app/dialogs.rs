@@ -402,12 +402,12 @@ impl HostForm {
                 .placeholder("ssh-agent / ~/.ssh/config")
                 .hint("Enter lists the keys in ~/.ssh, or type a path. Empty = whatever ssh would use"),
         ];
-        for (ids, label, kind, value, stored, what) in [
-            (PW, "Password", pw_kind, &pw_value, ctx.saved_password, "the login password; also used for sudo"),
-            (ROOT, "Root password", root_kind, &root_value, ctx.saved_root, "for su - (leader+P types it)"),
+        for (ids, label, kind, value, stored, hint) in [
+            (PW, "Password", pw_kind, &pw_value, ctx.saved_password, "Where the login password comes from; sudo prompts use it too"),
+            (ROOT, "Root password", root_kind, &root_value, ctx.saved_root, "Where the root password comes from, for su - (leader+P types it)"),
         ] {
             let (src, vault, keyring, item, reference, cmd) = ids;
-            fields.push(Field::select(src, label, source_choices(), kind).hint(format!("Where {what} comes from")));
+            fields.push(Field::select(src, label, source_choices(), kind).hint(hint));
             fields.push(
                 Field::secret(vault, "  Saved password", stored)
                     .placeholder(if ctx.vault_locked { "vault locked · leave empty to keep the current one" } else { "" })
