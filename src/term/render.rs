@@ -33,13 +33,12 @@ pub fn render(emu: &Emulator, area: Rect, buf: &mut Buffer, opts: &RenderOpts) -
         }
 
         // alacritty keeps '\t' in the cell where a tab started; printed raw it moves the real cursor.
-        let mut symbol = String::with_capacity(4);
-        symbol.push(if cell.c.is_control() { ' ' } else { cell.c });
-        if let Some(zw) = cell.zerowidth() {
-            symbol.extend(zw);
-        }
+        let c = if cell.c.is_control() { ' ' } else { cell.c };
         out.reset();
-        out.set_symbol(&symbol);
+        match cell.zerowidth() {
+            Some(zw) => out.set_symbol(&std::iter::once(c).chain(zw.iter().copied()).collect::<String>()),
+            None => out.set_char(c),
+        };
 
         let mut fg = map_color(cell.fg, opts);
         let mut bg = map_color(cell.bg, opts);
@@ -173,6 +172,18 @@ mod tests {
         render(&emu, area, &mut buf, &RenderOpts { truecolor: false });
         let row: String = (0..20).map(|x| buf[(x, 0)].symbol()).collect();
         assert_eq!(row.trim_end(), "ab      XY");
+    }
+
+    #[test]
+    fn combining_marks_stay_in_their_cell() {
+        use super::super::pane::GridSize;
+        let mut emu = Emulator::headless(GridSize { cols: 10, rows: 1 });
+        emu.advance("e\u{301}x".as_bytes());
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+        render(&emu, area, &mut buf, &RenderOpts { truecolor: false });
+        assert_eq!(buf[(0, 0)].symbol(), "e\u{301}");
+        assert_eq!(buf[(1, 0)].symbol(), "x");
     }
 
     #[test]

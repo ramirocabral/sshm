@@ -212,7 +212,7 @@ impl App {
     }
 
     pub fn handle(&mut self, ev: AppEvent) {
-        self.dirty = true;
+        self.dirty |= !matches!(ev, AppEvent::Tick);
         match ev {
             AppEvent::Input(ev) => self.handle_input(ev),
             AppEvent::Pane(id, n) => self.handle_pane_event(id, n),
@@ -234,8 +234,7 @@ impl App {
             AppEvent::Tick => {
                 if self.toast.as_ref().is_some_and(|t| t.1.elapsed() > Duration::from_secs(4)) {
                     self.toast = None;
-                } else {
-                    self.dirty = self.toast.is_some() || self.leader_pending;
+                    self.dirty = true;
                 }
                 if self.cfg.vault_timeout > 0
                     && self.vault.is_unlocked()
@@ -243,6 +242,7 @@ impl App {
                 {
                     self.vault.lock();
                     self.info("Vault locked after inactivity");
+                    self.dirty = true;
                 }
             }
         }
@@ -902,6 +902,9 @@ impl App {
     }
 }
 
+/// Shortest time between two redraws (~60 fps): bursts of output are coalesced into one frame.
+const FRAME: Duration = Duration::from_millis(16);
+
 pub async fn run(cfg: Config) -> Result<()> {
     let runtime_dir = crate::paths::runtime_dir()?;
     let (tx, mut rx) = unbounded_channel::<AppEvent>();
@@ -950,12 +953,23 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
 
     let result: Result<()> = async {
+        let mut last_draw: Option<Instant> = None;
         loop {
-            if app.dirty {
+            let next_frame = last_draw.map(|t| t + FRAME);
+            if app.dirty && next_frame.is_none_or(|t| Instant::now() >= t) {
                 app.dirty = false;
                 terminal.draw(|f| crate::ui::draw(f, &mut app))?;
+                last_draw = Some(Instant::now());
             }
-            let Some(ev) = rx.recv().await else { break };
+            let ev = match next_frame.filter(|_| app.dirty) {
+                Some(at) => tokio::select! {
+                    ev = rx.recv() => Some(ev),
+                    () = tokio::time::sleep_until(at.into()) => None,
+                },
+                None => Some(rx.recv().await),
+            };
+            let Some(ev) = ev else { continue };
+            let Some(ev) = ev else { break };
             app.handle(ev);
             let mut n = 0;
             while let Ok(ev) = rx.try_recv() {
