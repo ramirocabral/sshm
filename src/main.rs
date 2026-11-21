@@ -3,6 +3,7 @@ mod clipboard;
 mod import;
 mod paths;
 mod secrets;
+mod shell;
 mod ssh;
 mod store;
 mod term;

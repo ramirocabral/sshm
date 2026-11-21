@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use super::theme::colors;
 use crate::app::App;
 use crate::app::dialogs::*;
+use crate::app::keymap::{self, Ctx};
 use crate::ssh::command::PromptKind;
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -121,17 +122,24 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         }
         Dialog::Palette(p) => {
             let matches = p.matches();
-            let rect = centered(area, 80, matches.len() as u16 + 5);
+            let rect = centered(area, 96, matches.len() as u16 + 5);
             let inner = frame(f, rect, "Commands", colors().accent);
             text(f, inner.x, inner.y, ">", 1, Style::default().fg(colors().accent));
             let cursor = p.input.render(Rect { x: inner.x + 2, y: inner.y, width: inner.width.saturating_sub(2), height: 1 }, f.buffer_mut(), true, Style::default());
-            for (i, c) in matches.iter().enumerate() {
+            for (i, action) in matches.iter().enumerate() {
                 let y = inner.y + 2 + i as u16;
                 if y >= inner.bottom() {
                     break;
                 }
+                let row = Rect { x: inner.x, y, width: inner.width, height: 1 };
                 let style = if i == p.selected { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
-                text(f, inner.x, y, &format!(" {} ", c.label()), inner.width, style);
+                f.buffer_mut().set_style(row, style);
+                text(f, row.x, y, &format!(" {} ", action.title()), row.width, style);
+                let keys = keymap::keys_for(*action, &app.leader);
+                let kw = keys.chars().count() as u16 + 1;
+                if !keys.is_empty() && action.title().chars().count() as u16 + kw + 3 < row.width {
+                    text(f, row.right() - kw, y, &keys, kw, style.fg(colors().muted));
+                }
             }
             cursor
         }
@@ -272,79 +280,74 @@ pub fn filter_help(entries: Vec<HelpLine>, query: &str) -> Vec<HelpLine> {
 pub fn help_entries(app: &App) -> Vec<HelpLine> {
     let l = app.leader.label();
     let head = |s: &str| HelpLine::Head(s.to_string());
-    let row = |k: String, d: &str| HelpLine::Row(k, d.to_string());
-    vec![
-        head("Inside a session (leader key)"),
-        row(format!("{l} Tab"), "go to the host list / back"),
-        row(format!("{l} \\"), "show/hide the host list"),
-        row(format!("{l} 1..9  ·  Alt+1..9"), "go to tab N"),
-        row(format!("{l} L / H  ·  N / B"), "next / previous tab"),
-        row(format!("{l} hjkl  ·  Alt+arrows"), "move between panes"),
-        row(format!("{l} o"), "next pane"),
-        row(format!("{l} z"), "zoom the pane (full screen)"),
-        row(format!("{l} d"), "duplicate the session into this tab (grid)"),
-        row(format!("{l} t"), "local shell in a new tab"),
-        row(format!("{l} s"), "SFTP to the current host"),
-        row(format!("{l} b"), "broadcast: type into every pane of the tab"),
-        row(format!("{l} x"), "exclude/include the pane in broadcast"),
-        row(format!("{l} p"), "type the host password (sudo, etc.)"),
-        row(format!("{l} P"), "type the root password (su -)"),
-        row(format!("{l} ["), "copy mode (vi): v/V select, y copies, q exits"),
-        row(format!("{l} r"), "reconnect"),
-        row(format!("{l} w"), "close pane / tab"),
-        row(format!("{l} W"), "close the whole tab right away (no confirmation)"),
-        row(format!("{l} ,"), "rename tab"),
-        row(format!("{l} n / e"), "new host / edit the current host"),
-        row(format!("{l} i"), "import"),
-        row(format!("{l} :"), "command palette"),
-        row(format!("{l} {l}"), "send the leader key to the session"),
-        row(format!("{l} q"), "quit"),
-        HelpLine::Blank,
-        head("Host list"),
-        row("j/k ↑↓ · g/G · Ctrl+d/u".into(), "move"),
-        row("h/l ←→".into(), "collapse/expand folder"),
-        row("Enter".into(), "connect (or open every marked host in a grid)"),
-        row("Space".into(), "mark host (on a folder: marks all)"),
-        row("v / V".into(), "select a range with j/k: Enter opens it in a grid, o in this tab, Space marks it, m moves it, d deletes it"),
-        row("o".into(), "open in the current tab"),
-        row("/".into(), "search (fuzzy: name, host, user or tag); Ctrl+j/k moves while typing"),
-        row("n / e / c / d".into(), "new / edit / duplicate / delete host"),
-        row("e on a folder".into(), "rename it"),
-        row("m".into(), "move the marked hosts, or the folder/host under the cursor, to another folder"),
-        row("s".into(), "SFTP"),
-        row("y".into(), "copy user@host"),
-        row("i / x".into(), "import / export"),
-        row("t".into(), "local shell"),
-        row("Esc / Tab".into(), "back to the session"),
+    let row = |k: &str, d: &str| HelpLine::Row(k.to_string(), d.to_string());
+    let bound = |ctx: Ctx, prefix: &str| -> Vec<HelpLine> {
+        keymap::help_rows(ctx, &app.leader).into_iter().map(|r| HelpLine::Row(format!("{prefix}{}", r.keys), r.desc.to_string())).collect()
+    };
+    let mut out = vec![head("Inside a session (leader key)")];
+    out.extend(bound(Ctx::Leader, &format!("{l} ")));
+    if app.cfg.alt_shortcuts {
+        out.extend([HelpLine::Blank, head("Without the leader (alt_shortcuts)")]);
+        out.extend(bound(Ctx::Alt, ""));
+    }
+    out.extend([HelpLine::Blank, head("Host list")]);
+    out.extend(bound(Ctx::Motion, ""));
+    out.extend(bound(Ctx::Hosts, ""));
+    out.extend([HelpLine::Blank, head("Visual selection (v / V in the host list)")]);
+    out.extend(bound(Ctx::Visual, ""));
+    out.extend([
         HelpLine::Blank,
         head("Mouse"),
-        row("drag".into(), "select and copy (Shift+drag when the app uses the mouse)"),
-        row("double/triple click".into(), "select word / line"),
-        row("wheel".into(), "scrollback"),
-        row("click on a tab".into(), "switch · middle click: close"),
+        row("drag", "select and copy (Shift+drag when the app uses the mouse)"),
+        row("double/triple click", "select word / line"),
+        row("wheel", "scrollback"),
+        row("click on a tab", "switch · middle click: close"),
         HelpLine::Blank,
         head("Forms (new/edit host, import, export) · vim-like modes"),
-        row("j / k  ·  ↑↓ · Tab".into(), "NORMAL: move between fields"),
-        row("gg / G".into(), "NORMAL: first field / the Save button"),
-        row("h / l  ·  ←→".into(), "NORMAL: change a choice, flip a switch"),
-        row("i  a  I  A  ·  Enter".into(), "NORMAL: edit the text field (INSERT mode)"),
-        row("S".into(), "NORMAL: clear the field and type"),
-        row("D".into(), "NORMAL: clear the field (on a password: delete the saved one)"),
-        row("Enter / Space".into(), "NORMAL: open the list of choices or suggestions"),
-        row("Esc".into(), "INSERT → NORMAL; in NORMAL: cancel (asks if there are changes)"),
-        row("q".into(), "NORMAL: cancel"),
-        row("Ctrl+j / Ctrl+k".into(), "move between fields in any mode (also Ctrl+n / Ctrl+p)"),
-        row("j / k  ·  Ctrl+j / Ctrl+k".into(), "move in a list of choices (Ctrl+ while typing a filter)"),
-        row("w  ·  Save button  ·  Ctrl+S".into(), "NORMAL: save / run (Ctrl+S only if the terminal lets it through)"),
+        row("j / k  ·  ↑↓ · Tab", "NORMAL: move between fields"),
+        row("gg / G", "NORMAL: first field / the Save button"),
+        row("h / l  ·  ←→", "NORMAL: change a choice, flip a switch"),
+        row("i  a  I  A  ·  Enter", "NORMAL: edit the text field (INSERT mode)"),
+        row("S", "NORMAL: clear the field and type"),
+        row("D", "NORMAL: clear the field (on a password: delete the saved one)"),
+        row("Enter / Space", "NORMAL: open the list of choices or suggestions"),
+        row("Esc", "INSERT → NORMAL; in NORMAL: cancel (asks if there are changes)"),
+        row("q", "NORMAL: cancel"),
+        row("Ctrl+j / Ctrl+k", "move between fields in any mode (also Ctrl+n / Ctrl+p)"),
+        row("j / k  ·  Ctrl+j / Ctrl+k", "move in a list of choices (Ctrl+ while typing a filter)"),
+        row("w  ·  Save button  ·  Ctrl+S", "NORMAL: save / run (Ctrl+S only if the terminal lets it through)"),
         HelpLine::Blank,
         head("Help"),
-        row("/".into(), "search the shortcuts"),
-        row("j / k · g / G · Ctrl+d / Ctrl+u".into(), "scroll"),
+        row("/", "search the shortcuts"),
+        row("j / k · g / G · Ctrl+d / Ctrl+u", "scroll"),
         HelpLine::Blank,
         head("Passwords"),
-        HelpLine::Text("  Passwords are stored encrypted in the vault (age + scrypt) under a master password.".into()),
+        HelpLine::Text("  Each host picks where its passwords come from: e edits the host to change it.".into()),
+        HelpLine::Text("  System keyring (secret-tool): the default for new hosts when secret-tool is installed.".into()),
+        HelpLine::Text("  sshm's vault: encrypted with age + scrypt under one master password.".into()),
+        HelpLine::Text("  Bitwarden (bw or rbw), 1Password (op), or any command that prints the password.".into()),
         HelpLine::Text(format!("  On connect sshm answers ssh's password prompt; when sudo asks, {l} p types the password.")),
-        HelpLine::Text("  Auto sudo (per host) answers sudo prompts by itself, once per prompt.".into()),
-        HelpLine::Text("  Edit a host (e) to choose where its password comes from: vault, Bitwarden, 1Password or a command.".into()),
-    ]
+        HelpLine::Text("  Auto sudo (per host) answers every sudo prompt in that session, nested ssh hops included.".into()),
+    ]);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::tests::app_with_hosts;
+
+    #[test]
+    fn help_lists_every_bound_key_and_filters() {
+        let (app, _dir) = app_with_hosts(&[]);
+        let entries = help_entries(&app);
+        let rows: Vec<(String, String)> =
+            entries.iter().filter_map(|e| if let HelpLine::Row(k, d) = e { Some((k.clone(), d.clone())) } else { None }).collect();
+        assert!(rows.iter().any(|(k, d)| k == "Ctrl+Space ?" && d == "this help"));
+        assert!(rows.iter().any(|(k, _)| k == "Alt+1..9"));
+        assert!(rows.iter().any(|(k, _)| k == "n / e / c / d"));
+        assert!(entries.iter().any(|e| matches!(e, HelpLine::Text(t) if t.contains("keyring") )));
+        let found = filter_help(help_entries(&app), "zoom");
+        assert!(matches!(found.as_slice(), [HelpLine::Head(_), HelpLine::Row(k, _)] if k == "Ctrl+Space z"));
+    }
 }

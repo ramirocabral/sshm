@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use crate::app::keymap::{self, Ctx};
 use crate::app::sidebar::Item;
 use crate::app::{App, Focus, TabKind, ToastKind};
 use crate::term::pane::GridSize;
@@ -105,8 +106,8 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 let arrow = if *expanded { "▾" } else { "▸" };
                 (format!("{}{arrow} {name} ({count})", "  ".repeat(*depth)), Style::default().fg(colors().folder).add_modifier(Modifier::BOLD))
             }
-            Item::Host { id, depth } => {
-                let Some(h) = app.store.get(id) else { continue };
+            Item::Host { id, depth, .. } => {
+                let Some(h) = item.host(&app.store) else { continue };
                 let mark = if app.sidebar.marked.contains(id) { "✓" } else if connected.contains(id.as_str()) { "●" } else { " " };
                 let indent = if app.sidebar.query.is_empty() { "  ".repeat(*depth) } else { String::new() };
                 let label = if app.sidebar.query.is_empty() { h.name.clone() } else { h.path() };
@@ -135,8 +136,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         f.buffer_mut().set_stringn(list_area.x, y, &text, list_area.width as usize, style);
     }
 
-    if let Some(Item::Host { id, .. }) = items.get(app.sidebar.selected)
-        && let Some(h) = app.store.get(id)
+    if let Some(h) = items.get(app.sidebar.selected).and_then(|i| i.host(&app.store))
             && list_area.height > 6 && items.len() < (list_area.height as usize).saturating_sub(3) {
                 let y = list_area.bottom() - 2;
                 let target = h.display_target();
@@ -285,22 +285,19 @@ fn draw_body(f: &mut Frame, app: &mut App, area: Rect) -> Option<Position> {
 fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
     let leader = app.leader.label();
     let k = |s: &str| Span::styled(s.to_string(), Style::default().fg(colors().accent).add_modifier(Modifier::BOLD));
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled("sshm", Style::default().add_modifier(Modifier::BOLD).fg(colors().accent))),
         Line::from("SSH session manager"),
         Line::from(""),
-        Line::from(vec![k("Enter"), Span::raw("  connect to the selected host")]),
-        Line::from(vec![k("Space"), Span::raw("  mark several → Enter opens them in a grid")]),
-        Line::from(vec![k("v"), Span::raw("  select a range with j/k → Enter opens it in a grid")]),
-        Line::from(vec![k("o"), Span::raw("  add the host to the current tab")]),
-        Line::from(vec![k("s"), Span::raw("  SFTP to the host")]),
-        Line::from(vec![k("n / e / d"), Span::raw("  new / edit / delete host")]),
-        Line::from(vec![k("/"), Span::raw("  search")]),
-        Line::from(vec![k("i / x"), Span::raw("  import / export")]),
+    ];
+    for row in keymap::help_rows(Ctx::Hosts, &app.leader).into_iter().filter(|r| r.welcome) {
+        lines.push(Line::from(vec![k(&row.keys), Span::raw(format!("  {}", row.desc))]));
+    }
+    lines.extend([
         Line::from(""),
         Line::from(vec![k(&leader), Span::raw(" is the leader key inside a session:")]),
         Line::from(vec![k(&format!("{leader} ?")), Span::raw("  full help")]),
-    ];
+    ]);
     let h = lines.len() as u16;
     let y = area.y + area.height.saturating_sub(h) / 2;
     let r = Rect { x: area.x, y, width: area.width, height: h.min(area.height) };
@@ -343,20 +340,11 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(colors().warning).add_modifier(Modifier::BOLD),
         ));
     } else if app.leader_pending {
-        spans.push(Span::styled(
-            "n new · s sftp · d duplicate · b broadcast · x exclude · p/P password · [ copy · z zoom · r reconnect · w/W close pane/tab · ? help",
-            Style::default().fg(colors().subtle),
-        ));
+        spans.push(Span::styled(keymap::hints(Ctx::Leader, &app.leader), Style::default().fg(colors().subtle)));
     } else if sidebar_visual {
-        spans.push(Span::styled(
-            "j/k extend · Enter open in a grid · o add to tab · Space mark · m move · d delete · Esc cancel",
-            Style::default().fg(colors().subtle),
-        ));
+        spans.push(Span::styled(format!("j/k extend · {}", keymap::hints(Ctx::Visual, &app.leader)), Style::default().fg(colors().subtle)));
     } else if app.focus == Focus::Sidebar {
-        spans.push(Span::styled(
-            "Enter connect · Space mark · v select · o add to tab · s sftp · n/e/d host · m move · / search · ? help",
-            Style::default().fg(colors().subtle),
-        ));
+        spans.push(Span::styled(keymap::hints(Ctx::Hosts, &app.leader), Style::default().fg(colors().subtle)));
     } else {
         spans.push(Span::styled(format!("{leader} is the leader key · {leader} ? help · {leader} Tab hosts"), Style::default().fg(colors().muted)));
     }

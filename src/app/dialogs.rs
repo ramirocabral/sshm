@@ -1,7 +1,10 @@
+use clap::ValueEnum;
 use tokio::sync::oneshot;
 
 use super::form::{Choice, Field, FieldKind, Form, Mode};
+use super::keymap::{Action, PALETTE};
 use super::widgets::TextInput;
+use crate::import::{Conflict, ExportFormat, Source};
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
 use crate::store::hosts::{Host, SecretSource, normalize_folder, subpath};
@@ -20,6 +23,39 @@ pub enum Dialog {
     Export(ExportForm),
     Move(MoveForm),
     Theme(ThemeForm),
+}
+
+impl Dialog {
+    /// The form of the dialogs built on one.
+    pub fn form_mut(&mut self) -> Option<&mut Form> {
+        match self {
+            Dialog::HostForm(d) => Some(&mut d.form),
+            Dialog::Import(d) => Some(&mut d.form),
+            Dialog::Export(d) => Some(&mut d.form),
+            Dialog::Move(d) => Some(&mut d.form),
+            Dialog::Theme(d) => Some(&mut d.form),
+            _ => None,
+        }
+    }
+
+    /// Lets the owner of a form react to an edited field (dependent fields, defaults).
+    pub fn form_changed(&mut self, id: &str) {
+        match self {
+            Dialog::HostForm(d) => d.on_change(id),
+            Dialog::Import(d) => d.on_change(id),
+            Dialog::Export(d) => d.on_change(id),
+            _ => {}
+        }
+    }
+}
+
+/// The value a clap::ValueEnum variant has on the command line, used as a form choice value.
+pub fn choice_value<T: ValueEnum>(v: T) -> String {
+    v.to_possible_value().map(|p| p.get_name().to_string()).unwrap_or_default()
+}
+
+pub fn parse_choice<T: ValueEnum>(value: &str) -> Option<T> {
+    T::from_str(value, false).ok()
 }
 
 /// What to do once a secret is available.
@@ -65,6 +101,35 @@ pub struct AskPassDialog {
     pub reply: Option<oneshot::Sender<Option<String>>>,
 }
 
+impl AskPassDialog {
+    pub fn new(label: String, prompt: String, kind: PromptKind, reply: oneshot::Sender<Option<String>>) -> Self {
+        AskPassDialog {
+            label,
+            prompt,
+            input: TextInput::masked(),
+            kind,
+            host_id: None,
+            secret_kind: None,
+            save: false,
+            note: None,
+            reply: Some(reply),
+        }
+    }
+
+    /// The answer can be stored as the host's `kind` secret; `save` is the initial choice.
+    pub fn storable(mut self, host_id: String, kind: SecretKind, save: bool) -> Self {
+        self.host_id = Some(host_id);
+        self.secret_kind = Some(kind);
+        self.save = save;
+        self
+    }
+
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
+}
+
 pub enum ConfirmAction {
     HostKey(oneshot::Sender<Option<String>>),
     DeleteHosts(Vec<String>),
@@ -94,68 +159,19 @@ pub struct InputDialog {
     pub action: Option<InputAction>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Command {
-    NewHost,
-    LocalShell,
-    ImportSshConfig,
-    Import,
-    Export,
-    LockVault,
-    ChangeMaster,
-    ToggleBroadcast,
-    ToggleSidebar,
-    Theme,
-    Help,
-    Paths,
-    Quit,
-}
-
-impl Command {
-    pub const ALL: [Command; 13] = [
-        Command::NewHost,
-        Command::LocalShell,
-        Command::ImportSshConfig,
-        Command::Import,
-        Command::Export,
-        Command::LockVault,
-        Command::ChangeMaster,
-        Command::ToggleBroadcast,
-        Command::ToggleSidebar,
-        Command::Theme,
-        Command::Help,
-        Command::Paths,
-        Command::Quit,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Command::NewHost => "New host",
-            Command::LocalShell => "Open a local shell",
-            Command::ImportSshConfig => "Import ~/.ssh/config",
-            Command::Import => "Import from file… (JSON, CSV, bundle, MobaXterm, Ásbrú, Remmina)",
-            Command::Export => "Export hosts…",
-            Command::LockVault => "Lock the vault",
-            Command::ChangeMaster => "Change the master password",
-            Command::ToggleBroadcast => "Toggle broadcast in this tab",
-            Command::ToggleSidebar => "Show/hide the host list",
-            Command::Theme => "Change the theme",
-            Command::Help => "Help and key bindings",
-            Command::Paths => "Show config and data locations",
-            Command::Quit => "Quit",
-        }
-    }
-}
-
 pub struct PaletteDialog {
     pub input: TextInput,
     pub selected: usize,
 }
 
 impl PaletteDialog {
-    pub fn matches(&self) -> Vec<Command> {
+    pub fn new() -> Self {
+        PaletteDialog { input: TextInput::default(), selected: 0 }
+    }
+
+    pub fn matches(&self) -> Vec<Action> {
         let q = self.input.value.to_lowercase();
-        Command::ALL.iter().copied().filter(|c| q.split_whitespace().all(|w| c.label().to_lowercase().contains(w))).collect()
+        PALETTE.iter().copied().filter(|a| q.split_whitespace().all(|w| a.title().to_lowercase().contains(w))).collect()
     }
 }
 
@@ -166,15 +182,15 @@ pub struct HelpDialog {
     pub query: String,
 }
 
-pub fn default_import_path(source: &str) -> &'static str {
+pub fn default_import_path(source: Source) -> &'static str {
     match source {
-        "ssh-config" => "~/.ssh/config",
-        "json" => "~/sshm-export.json",
-        "csv" => "~/sshm-export.csv",
-        "bundle" => "~/sshm-export.age",
-        "mobaxterm" => "~/MobaXterm.ini",
-        "asbru" => "~/.config/asbru/asbru.yml",
-        _ => "~/.local/share/remmina",
+        Source::SshConfig => "~/.ssh/config",
+        Source::Json => "~/sshm-export.json",
+        Source::Csv => "~/sshm-export.csv",
+        Source::Bundle => "~/sshm-export.age",
+        Source::Mobaxterm => "~/MobaXterm.ini",
+        Source::Asbru => "~/.config/asbru/asbru.yml",
+        Source::Remmina => "~/.local/share/remmina",
     }
 }
 
@@ -184,44 +200,52 @@ pub struct ImportForm {
 
 impl ImportForm {
     pub fn new() -> Self {
+        let source = |s: Source, label: &str, detail: &str| Choice::new(choice_value(s), label, detail);
         let sources = vec![
-            Choice::new("ssh-config", "OpenSSH config", "Host blocks of ~/.ssh/config"),
-            Choice::new("json", "sshm JSON", "an export made with sshm"),
-            Choice::new("csv", "sshm CSV", "name,folder,host,port,user,… (spreadsheet friendly)"),
-            Choice::new("bundle", "Encrypted bundle", "an sshm export protected with a password"),
-            Choice::new("mobaxterm", "MobaXterm", "MobaXterm.ini or a .mxtsessions file"),
-            Choice::new("asbru", "Ásbrú", "asbru.yml"),
-            Choice::new("remmina", "Remmina", "a .remmina file or the whole directory"),
+            source(Source::SshConfig, "OpenSSH config", "Host blocks of ~/.ssh/config"),
+            source(Source::Json, "sshm JSON", "an export made with sshm"),
+            source(Source::Csv, "sshm CSV", "name,folder,host,port,user,… (spreadsheet friendly)"),
+            source(Source::Bundle, "Encrypted bundle", "an sshm export protected with a password"),
+            source(Source::Mobaxterm, "MobaXterm", "MobaXterm.ini or a .mxtsessions file"),
+            source(Source::Asbru, "Ásbrú", "asbru.yml"),
+            source(Source::Remmina, "Remmina", "a .remmina file or the whole directory"),
         ];
+        let conflict = |c: Conflict, label: &str, detail: &str| Choice::new(choice_value(c), label, detail);
         let conflicts = vec![
-            Choice::new("skip", "Skip it", "keep the existing host untouched"),
-            Choice::new("overwrite", "Overwrite it", "replace the existing host with the imported one"),
-            Choice::new("rename", "Import as a copy", "add it with a \"(2)\" suffix"),
+            conflict(Conflict::Skip, "Skip it", "keep the existing host untouched"),
+            conflict(Conflict::Overwrite, "Overwrite it", "replace the existing host with the imported one"),
+            conflict(Conflict::Rename, "Import as a copy", "add it with a \"(2)\" suffix"),
         ];
         let fields = vec![
-            Field::select("source", "Import from", sources, "ssh-config").hint("Where the hosts come from"),
-            Field::text("path", "File", default_import_path("ssh-config")).hint("Path to the file; ~ is expanded"),
+            Field::select("source", "Import from", sources, &choice_value(Source::SshConfig)).hint("Where the hosts come from"),
+            Field::text("path", "File", default_import_path(Source::SshConfig)).hint("Path to the file; ~ is expanded"),
             Field::secret("passphrase", "Password", false).placeholder("type it here"),
-            Field::select("conflict", "If it exists", conflicts, "skip").hint("Hosts with the same folder and name"),
+            Field::select("conflict", "If it exists", conflicts, &choice_value(Conflict::Skip)).hint("Hosts with the same folder and name"),
         ];
         let mut f = ImportForm { form: Form::new("Import hosts", "Import", fields) };
         f.sync();
         f
     }
 
+    pub fn source(&self) -> Source {
+        parse_choice(&self.form.value("source")).unwrap_or(Source::SshConfig)
+    }
+
+    pub fn conflict(&self) -> Conflict {
+        parse_choice(&self.form.value("conflict")).unwrap_or(Conflict::Skip)
+    }
+
     pub fn on_change(&mut self, id: &str) {
         if id == "source" {
-            let src = self.form.value("source");
-            self.form.set_value("path", default_import_path(&src));
+            self.form.set_value("path", default_import_path(self.source()));
         }
         self.sync();
     }
 
     fn sync(&mut self) {
-        let src = self.form.value("source");
-        let hint = match src.as_str() {
-            "bundle" => "The password used when the bundle was exported",
-            "mobaxterm" => "MobaXterm master password, to bring the saved passwords along (empty = hosts only)",
+        let hint = match self.source() {
+            Source::Bundle => "The password used when the bundle was exported",
+            Source::Mobaxterm => "MobaXterm master password, to bring the saved passwords along (empty = hosts only)",
             _ => "",
         };
         self.form.field_mut("passphrase").hint = hint.into();
@@ -285,13 +309,15 @@ pub struct ExportForm {
 
 impl ExportForm {
     pub fn new() -> Self {
+        let format = |f: ExportFormat, label: &str, detail: &str| Choice::new(choice_value(f), label, detail);
         let formats = vec![
-            Choice::new("bundle", "Encrypted bundle", "hosts + passwords, protected with a password (recommended)"),
-            Choice::new("json", "JSON", "plain text"),
-            Choice::new("csv", "CSV", "plain text, opens in a spreadsheet"),
+            format(ExportFormat::Bundle, "Encrypted bundle", "hosts + passwords, protected with a password (recommended)"),
+            format(ExportFormat::Json, "JSON", "plain text"),
+            format(ExportFormat::Csv, "CSV", "plain text, opens in a spreadsheet"),
         ];
         let fields = vec![
-            Field::select("format", "Format", formats, "bundle").hint("The bundle is the way to move everything to another machine"),
+            Field::select("format", "Format", formats, &choice_value(ExportFormat::Bundle))
+                .hint("The bundle is the way to move everything to another machine"),
             Field::text("path", "File", "~/sshm-export.age").hint("Where to write the export; ~ is expanded"),
             Field::toggle("with_secrets", "Include passwords", true),
             Field::secret("passphrase", "Bundle password", false)
@@ -304,12 +330,16 @@ impl ExportForm {
         f
     }
 
+    pub fn format(&self) -> ExportFormat {
+        parse_choice(&self.form.value("format")).unwrap_or(ExportFormat::Bundle)
+    }
+
     pub fn on_change(&mut self, id: &str) {
         if id == "format" {
-            let ext = match self.form.value("format").as_str() {
-                "json" => "json",
-                "csv" => "csv",
-                _ => "age",
+            let ext = match self.format() {
+                ExportFormat::Json => "json",
+                ExportFormat::Csv => "csv",
+                ExportFormat::Bundle => "age",
             };
             let path = self.form.value("path");
             let base = path.rsplit_once('.').map(|(b, _)| b.to_string()).unwrap_or(path);
@@ -319,7 +349,7 @@ impl ExportForm {
     }
 
     fn sync(&mut self) {
-        let bundle = self.form.value("format") == "bundle";
+        let bundle = self.format() == ExportFormat::Bundle;
         self.form.set_visible("passphrase", bundle);
         self.form.set_visible("confirm", bundle);
         self.form.field_mut("with_secrets").hint = if bundle {
@@ -437,13 +467,13 @@ impl HostForm {
         fields.extend([
             Field::toggle("auto_sudo", "Auto sudo", host.auto_sudo)
                 .section("Behavior")
-                .hint("Type the password into sudo prompts automatically (once per prompt)"),
+                .hint("Types the password into any sudo prompt shown in this session, nested ssh hops included (once per prompt)"),
             Field::text("on_connect", "On connect", opt(&host.on_connect))
                 .placeholder("e.g. sudo -i")
                 .hint("Typed into the session once the shell prompt shows up"),
-            Field::text("ssh_args", "Extra ssh args", host.ssh_args.join(" "))
+            Field::text("ssh_args", "Extra ssh args", crate::shell::join(&host.ssh_args))
                 .placeholder("e.g. -o ServerAliveInterval=30")
-                .hint("Passed to ssh as is"),
+                .hint("Passed to ssh; quote an argument that has spaces, as in a shell"),
             Field::text("tags", "Tags", host.tags.join(", ")).section("Notes").placeholder("e.g. prod, web").hint("Comma separated; / in the host list searches them"),
             Field::text("notes", "Notes", host.notes.clone()),
         ]);
@@ -514,6 +544,7 @@ impl HostForm {
         let opt = |id: &str| Some(f.value(id)).filter(|v| !v.is_empty());
         let name = f.value("name");
         let folder = normalize_folder(&f.value("folder"));
+        let ssh_args = crate::shell::split(&f.value("ssh_args")).ok_or("Extra ssh args: a quote is not closed")?;
         Ok(Host {
             id: self.id.clone(),
             name: if name.is_empty() { host.clone() } else { name },
@@ -529,7 +560,7 @@ impl HostForm {
             root_password: self.source(ROOT, "Root password")?,
             auto_sudo: f.toggled("auto_sudo"),
             on_connect: opt("on_connect"),
-            ssh_args: f.value("ssh_args").split_whitespace().map(str::to_string).collect(),
+            ssh_args,
         })
     }
 
@@ -607,18 +638,47 @@ mod tests {
     }
 
     #[test]
+    fn ssh_args_with_spaces_survive_the_form() {
+        let host = Host {
+            host: "nas".into(),
+            ssh_args: vec!["-o".into(), "ProxyCommand=ssh -W %h:%p gw.lab".into(), "-C".into()],
+            ..Host::default()
+        };
+        let mut form = HostForm::new(&host, true, ctx());
+        assert_eq!(form.form.value("ssh_args"), "-o 'ProxyCommand=ssh -W %h:%p gw.lab' -C");
+        assert_eq!(form.to_host().unwrap().ssh_args, host.ssh_args);
+        form.form.set_value("ssh_args", "-o \"ProxyCommand=nc %h %p");
+        assert!(form.to_host().unwrap_err().contains("quote"));
+    }
+
+    #[test]
     fn import_and_export_forms() {
         let mut i = ImportForm::new();
+        assert_eq!((i.source(), i.conflict()), (Source::SshConfig, Conflict::Skip));
         assert!(!i.form.field("passphrase").visible);
         i.form.set_value("source", "bundle");
         i.on_change("source");
+        assert_eq!(i.source(), Source::Bundle);
         assert!(i.form.field("passphrase").visible);
         assert_eq!(i.form.value("path"), "~/sshm-export.age");
+        i.form.set_value("conflict", "rename");
+        assert_eq!(i.conflict(), Conflict::Rename);
 
         let mut e = ExportForm::new();
+        assert_eq!(e.format(), ExportFormat::Bundle);
         e.form.set_value("format", "csv");
         e.on_change("format");
+        assert_eq!(e.format(), ExportFormat::Csv);
         assert_eq!(e.form.value("path"), "~/sshm-export.csv");
         assert!(!e.form.field("passphrase").visible);
+    }
+
+    #[test]
+    fn every_import_source_is_offered() {
+        let i = ImportForm::new();
+        let FieldKind::Select { options, .. } = &i.form.field("source").kind else { panic!() };
+        for s in Source::value_variants() {
+            assert!(options.iter().any(|c| parse_choice::<Source>(&c.value) == Some(*s)), "{s:?} missing");
+        }
     }
 }

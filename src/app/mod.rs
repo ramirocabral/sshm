@@ -1,6 +1,9 @@
+mod actions;
 pub mod dialogs;
 pub mod form;
+mod hosts;
 pub mod input;
+pub mod keymap;
 pub mod sftp;
 pub mod sidebar;
 pub mod widgets;
@@ -25,7 +28,6 @@ use crate::store::state::UiState;
 use crate::term::pane::{GridSize, PaneId, PaneNotify, TermPane};
 use dialogs::*;
 use sidebar::Sidebar;
-use widgets::TextInput;
 
 pub enum AppEvent {
     Input(CEvent),
@@ -131,28 +133,55 @@ pub struct App {
     pub mouse: input::MouseState,
     /// Expanded folders as last written to the state file.
     saved_expanded: HashSet<String>,
+    state_path: PathBuf,
     next_id: u64,
+}
+
+/// What an App is built from; `App::new` reads it from the XDG files and the terminal.
+pub struct AppParts {
+    pub cfg: Config,
+    pub store: HostStore,
+    pub vault: Vault,
+    pub state: UiState,
+    pub state_path: PathBuf,
+    pub askpass_sock: PathBuf,
+    pub runtime_dir: PathBuf,
+    pub truecolor: bool,
 }
 
 impl App {
     pub fn new(cfg: Config, tx: UnboundedSender<AppEvent>, askpass_sock: PathBuf, runtime_dir: PathBuf) -> Result<Self> {
-        let store = HostStore::load_default()?;
-        let leader = cfg.leader_key();
         let truecolor = crate::term::render::truecolor_supported();
         if let Some(theme) = crate::ui::theme::find(&cfg.theme) {
             crate::ui::theme::apply(theme, truecolor);
         }
+        let parts = AppParts {
+            cfg,
+            store: HostStore::load_default()?,
+            vault: Vault::new(Vault::default_path()),
+            state: UiState::load(),
+            state_path: UiState::path(),
+            askpass_sock,
+            runtime_dir,
+            truecolor,
+        };
+        Ok(App::from_parts(parts, tx))
+    }
+
+    pub fn from_parts(parts: AppParts, tx: UnboundedSender<AppEvent>) -> Self {
+        let AppParts { cfg, store, vault, state, state_path, askpass_sock, runtime_dir, truecolor } = parts;
+        let leader = cfg.leader_key();
         let mut sidebar = Sidebar::default();
         let mut saved_expanded = HashSet::new();
-        if let Some(expanded) = UiState::load().expanded {
+        if let Some(expanded) = state.expanded {
             saved_expanded = expanded.iter().cloned().collect();
             sidebar.restore(expanded);
         }
-        Ok(App {
+        App {
             cfg,
             leader,
             store,
-            vault: Vault::new(Vault::default_path()),
+            vault,
             tabs: Vec::new(),
             active: 0,
             panes: HashMap::new(),
@@ -174,8 +203,9 @@ impl App {
             last_vault_use: Instant::now(),
             mouse: input::MouseState::default(),
             saved_expanded,
+            state_path,
             next_id: 1,
-        })
+        }
     }
 
     /// Writes the UI state when the open folders changed since the last write.
@@ -187,7 +217,7 @@ impl App {
         let folders: HashSet<String> = self.store.folders().into_iter().collect();
         let mut expanded: Vec<String> = self.saved_expanded.iter().filter(|f| folders.contains(*f)).cloned().collect();
         expanded.sort();
-        if let Err(e) = (UiState { expanded: Some(expanded) }).save_to(&UiState::path()) {
+        if let Err(e) = (UiState { expanded: Some(expanded) }).save_to(&self.state_path) {
             tracing::warn!("could not save the UI state: {e:#}");
         }
     }
@@ -603,17 +633,7 @@ impl App {
                 Some(v) => {
                     let _ = reply.send(Some(v));
                 }
-                None => self.push_dialog(Dialog::AskPass(AskPassDialog {
-                    label,
-                    prompt,
-                    input: TextInput::masked(),
-                    kind: PromptKind::Password,
-                    host_id: Some(host_id),
-                    secret_kind: Some(kind),
-                    save: true,
-                    note: None,
-                    reply: Some(reply),
-                })),
+                None => self.push_dialog(Dialog::AskPass(AskPassDialog::new(label, prompt, PromptKind::Password, reply).storable(host_id, kind, true))),
             },
         }
     }
@@ -641,17 +661,8 @@ impl App {
                     let purpose = SecretPurpose::AskPass { reply: req.reply, prompt, host_id: host_id.clone(), label, kind: secret_kind };
                     self.with_secret(&host_id, secret_kind, purpose);
                 } else {
-                    self.push_dialog(Dialog::AskPass(AskPassDialog {
-                        label,
-                        prompt,
-                        input: TextInput::masked(),
-                        kind,
-                        host_id: Some(host_id),
-                        secret_kind: Some(secret_kind),
-                        save: true,
-                        note: Some("The previous password was rejected".into()),
-                        reply: Some(req.reply),
-                    }));
+                    let d = AskPassDialog::new(label, prompt, kind, req.reply).storable(host_id, secret_kind, true).note("The previous password was rejected");
+                    self.push_dialog(Dialog::AskPass(d));
                 }
             }
             PromptKind::Confirm => self.push_dialog(Dialog::Confirm(ConfirmDialog {
@@ -659,17 +670,7 @@ impl App {
                 body: prompt,
                 action: Some(ConfirmAction::HostKey(req.reply)),
             })),
-            PromptKind::Other => self.push_dialog(Dialog::AskPass(AskPassDialog {
-                label,
-                prompt,
-                input: TextInput::masked(),
-                kind,
-                host_id: Some(host_id),
-                secret_kind: None,
-                save: false,
-                note: None,
-                reply: Some(req.reply),
-            })),
+            PromptKind::Other => self.push_dialog(Dialog::AskPass(AskPassDialog::new(label, prompt, kind, req.reply))),
         }
     }
 
@@ -771,17 +772,8 @@ impl App {
         if let AfterUnlock::Secret { purpose, .. } = then {
             match purpose {
                 SecretPurpose::AskPass { reply, prompt, host_id, label, kind } => {
-                    self.push_dialog(Dialog::AskPass(AskPassDialog {
-                        label,
-                        prompt,
-                        input: TextInput::masked(),
-                        kind: PromptKind::Password,
-                        host_id: Some(host_id),
-                        secret_kind: Some(kind),
-                        save: false,
-                        note: Some("Vault locked: type it manually".into()),
-                        reply: Some(reply),
-                    }));
+                    let d = AskPassDialog::new(label, prompt, PromptKind::Password, reply).storable(host_id, kind, false).note("Vault locked: type it manually");
+                    self.push_dialog(Dialog::AskPass(d));
                 }
                 SecretPurpose::Type { .. } => {}
             }
@@ -791,22 +783,9 @@ impl App {
     // ---------- import / export ----------
 
     pub fn run_import(&mut self, mut dlg: ImportForm) {
-        use crate::import::{self, Conflict, ImportOptions, Source};
+        use crate::import::{self, ImportOptions};
+        let (source, conflict) = (dlg.source(), dlg.conflict());
         let f = &dlg.form;
-        let source = match f.value("source").as_str() {
-            "json" => Source::Json,
-            "csv" => Source::Csv,
-            "bundle" => Source::Bundle,
-            "mobaxterm" => Source::Mobaxterm,
-            "asbru" => Source::Asbru,
-            "remmina" => Source::Remmina,
-            _ => Source::SshConfig,
-        };
-        let conflict = match f.value("conflict").as_str() {
-            "overwrite" => Conflict::Overwrite,
-            "rename" => Conflict::Rename,
-            _ => Conflict::Skip,
-        };
         let path = crate::paths::expand_tilde(&f.value("path"));
         let opts = ImportOptions { passphrase: Some(f.raw("passphrase")).filter(|p| !p.is_empty()), ..ImportOptions::default() };
         let report = match import::import(source, &path, &opts) {
@@ -857,12 +836,8 @@ impl App {
 
     pub fn run_export(&mut self, dlg: ExportForm) {
         use crate::import::{self, ExportFormat};
+        let format = dlg.format();
         let f = &dlg.form;
-        let format = match f.value("format").as_str() {
-            "json" => ExportFormat::Json,
-            "csv" => ExportFormat::Csv,
-            _ => ExportFormat::Bundle,
-        };
         let want_secrets = f.toggled("with_secrets");
         let pass = f.raw("passphrase");
         let fail = |app: &mut App, mut dlg: ExportForm, msg: String| {
@@ -991,4 +966,47 @@ pub async fn run(cfg: Config) -> Result<()> {
     crate::tui::leave()?;
     let _ = std::fs::remove_file(&sock);
     result
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+    use crate::import::test_support::TempDir;
+    use crate::store::hosts::Host;
+
+    pub fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    /// An App over a scratch directory holding hosts given as (name, folder); no terminal involved.
+    pub fn app_with_hosts(hosts: &[(&str, &str)]) -> (App, TempDir) {
+        let dir = TempDir::new();
+        let mut store = dir.store();
+        for (name, folder) in hosts {
+            store.upsert(Host { name: (*name).into(), folder: (*folder).into(), host: format!("{name}.local"), ..Host::default() });
+        }
+        let parts = AppParts {
+            cfg: Config::default(),
+            store,
+            vault: Vault::new(dir.0.join("vault.age")),
+            state: UiState::default(),
+            state_path: dir.0.join("state.toml"),
+            askpass_sock: dir.0.join("askpass.sock"),
+            runtime_dir: dir.0.clone(),
+            truecolor: false,
+        };
+        let (tx, _rx) = unbounded_channel();
+        (App::from_parts(parts, tx), dir)
+    }
+
+    #[test]
+    fn ui_state_goes_to_its_own_path() {
+        let (mut app, dir) = app_with_hosts(&[("web1", "acme/prod")]);
+        app.sidebar.items(&app.store);
+        app.sidebar.expanded.insert("acme/prod".into());
+        app.persist_ui_state();
+        assert_eq!(UiState::load_from(&dir.0.join("state.toml")).expanded, Some(vec!["acme".to_string(), "acme/prod".to_string()]));
+    }
 }

@@ -1,15 +1,75 @@
-use std::collections::HashSet;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config as MatchConfig, Matcher, Utf32Str};
 
 use super::widgets::TextInput;
-use crate::store::hosts::{HostStore, parent_folder as parent_of, subpath};
+use crate::store::hosts::{Host, HostStore, parent_folder as parent_of, subpath};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Folder { path: String, name: String, depth: usize, expanded: bool, count: usize },
-    Host { id: String, depth: usize },
+    /// `idx` is the host's position in `store.hosts` when the list was built.
+    Host { id: String, idx: usize, depth: usize },
+}
+
+impl Item {
+    /// The host this row stands for, if the store has not changed since the list was built.
+    pub fn host<'a>(&self, store: &'a HostStore) -> Option<&'a Host> {
+        match self {
+            Item::Host { id, idx, .. } => store.hosts.get(*idx).filter(|h| h.id == *id).or_else(|| store.get(id)),
+            Item::Folder { .. } => None,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Node<'a> {
+    count: usize,
+    folders: Vec<&'a str>,
+    hosts: Vec<usize>,
+}
+
+/// Folder tree of the store in one pass: hosts per folder, subfolders, and recursive counts.
+struct Tree<'a> {
+    nodes: HashMap<&'a str, Node<'a>>,
+}
+
+/// The folder as `HostStore::folders` sees it: empty segments dropped.
+fn clean_folder(folder: &str) -> Cow<'_, str> {
+    if folder.split('/').any(str::is_empty) && !folder.is_empty() {
+        Cow::Owned(folder.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/"))
+    } else {
+        Cow::Borrowed(folder)
+    }
+}
+
+impl<'a> Tree<'a> {
+    /// `folders[i]` is the clean folder of `store.hosts[i]`.
+    fn build(folders: &'a [Cow<'a, str>]) -> Self {
+        let mut nodes: HashMap<&'a str, Node<'a>> = HashMap::new();
+        nodes.insert("", Node::default());
+        for (i, folder) in folders.iter().enumerate() {
+            let folder: &'a str = folder;
+            let mut end = 0;
+            while end < folder.len() {
+                end = folder[end..].find('/').map(|p| end + p).unwrap_or(folder.len());
+                let path = &folder[..end];
+                if !nodes.contains_key(path) {
+                    nodes.insert(path, Node::default());
+                    nodes.get_mut(parent_of(path)).expect("parent is inserted first").folders.push(path);
+                }
+                nodes.get_mut(path).expect("just inserted").count += 1;
+                end += 1;
+            }
+            nodes.get_mut(folder).expect("inserted above").hosts.push(i);
+        }
+        for node in nodes.values_mut() {
+            node.folders.sort_unstable();
+        }
+        Tree { nodes }
+    }
 }
 
 #[derive(Default)]
@@ -40,24 +100,26 @@ impl Sidebar {
         if !self.query.trim().is_empty() {
             return self.search_items(store);
         }
+        let folders: Vec<Cow<str>> = store.hosts.iter().map(|h| clean_folder(&h.folder)).collect();
+        let tree = Tree::build(&folders);
         let mut items = Vec::new();
-        let folders = store.folders();
-        self.push_level(store, &folders, "", 0, &mut items);
+        self.push_level(store, &tree, "", 0, &mut items);
         items
     }
 
-    fn push_level(&self, store: &HostStore, folders: &[String], parent: &str, depth: usize, out: &mut Vec<Item>) {
-        for f in folders.iter().filter(|f| parent_of(f) == parent) {
+    fn push_level(&self, store: &HostStore, tree: &Tree, parent: &str, depth: usize, out: &mut Vec<Item>) {
+        let Some(node) = tree.nodes.get(parent) else { return };
+        for &f in &node.folders {
             let expanded = self.expanded.contains(f);
-            let count = store.hosts_under(f).count();
+            let count = tree.nodes.get(f).map_or(0, |n| n.count);
             let name = f.rsplit('/').next().unwrap_or(f).to_string();
-            out.push(Item::Folder { path: f.clone(), name, depth, expanded, count });
+            out.push(Item::Folder { path: f.to_string(), name, depth, expanded, count });
             if expanded {
-                self.push_level(store, folders, f, depth + 1, out);
+                self.push_level(store, tree, f, depth + 1, out);
             }
         }
-        for h in store.hosts.iter().filter(|h| h.folder == parent) {
-            out.push(Item::Host { id: h.id.clone(), depth });
+        for &idx in &node.hosts {
+            out.push(Item::Host { id: store.hosts[idx].id.clone(), idx, depth });
         }
     }
 
@@ -65,16 +127,17 @@ impl Sidebar {
         let pattern = Pattern::parse(&self.query, CaseMatching::Ignore, Normalization::Smart);
         let mut matcher = Matcher::new(MatchConfig::DEFAULT);
         let mut buf = Vec::new();
-        let mut scored: Vec<(u32, &str)> = store
+        let mut scored: Vec<(u32, usize)> = store
             .hosts
             .iter()
-            .filter_map(|h| {
+            .enumerate()
+            .filter_map(|(i, h)| {
                 let hay = format!("{} {} {} {}", h.path(), h.host, h.user.as_deref().unwrap_or(""), h.tags.join(" "));
-                pattern.score(Utf32Str::new(&hay, &mut buf), &mut matcher).map(|s| (s, h.id.as_str()))
+                pattern.score(Utf32Str::new(&hay, &mut buf), &mut matcher).map(|s| (s, i))
             })
             .collect();
         scored.sort_by_key(|s| std::cmp::Reverse(s.0));
-        scored.into_iter().map(|(_, id)| Item::Host { id: id.to_string(), depth: 0 }).collect()
+        scored.into_iter().map(|(_, idx)| Item::Host { id: store.hosts[idx].id.clone(), idx, depth: 0 }).collect()
     }
 
     pub fn clamp(&mut self, len: usize) {
@@ -235,5 +298,27 @@ mod tests {
         assert!(sb.expanded.contains("zeta/acme2") && sb.expanded.contains("zeta/acme2/prod"));
         let items = sb.items(&store);
         assert!(matches!(&items[sb.selected], Item::Folder { path, .. } if path == "zeta/acme2"));
+    }
+
+    #[test]
+    fn tree_order_counts_and_rows() {
+        let mut store = HostStore::default();
+        for (name, folder) in [("r", ""), ("b1", "B"), ("a1", "a"), ("x1", "a/x"), ("y1", "a/x/y"), ("X1", "a/X"), ("odd", "a//x/")] {
+            store.upsert(Host { name: name.into(), folder: folder.into(), host: name.into(), ..Host::default() });
+        }
+        let mut sb = Sidebar::default();
+        sb.expanded.extend(store.folders());
+        sb.initialized = true;
+        let items = sb.items(&store);
+        let rows: Vec<String> = items
+            .iter()
+            .map(|i| match i {
+                Item::Folder { path, count, depth, .. } => format!("{depth}:{path}({count})"),
+                Item::Host { depth, .. } => format!("{depth}:{}", i.host(&store).unwrap().name),
+            })
+            .collect();
+        assert_eq!(rows, ["0:B(1)", "1:b1", "0:a(5)", "1:a/X(1)", "2:X1", "1:a/x(3)", "2:a/x/y(1)", "3:y1", "2:odd", "2:x1", "1:a1", "0:r"]);
+        store.hosts.remove(0);
+        assert_eq!(items[1].host(&store).map(|h| h.name.as_str()), Some("b1"));
     }
 }

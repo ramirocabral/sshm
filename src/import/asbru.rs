@@ -14,9 +14,10 @@ use md5::{Digest, Md5};
 use serde_yaml_ng::Value;
 
 use super::util::{
-    SkipCounter, cbc_decrypt, clean_folder, clean_segment, hex_decode, non_empty, pkcs7_unpad, port_opt, shell_split,
+    SkipCounter, cbc_decrypt, clean_folder, clean_segment, hex_decode, non_empty, pkcs7_unpad, port_opt,
 };
 use super::{ImportReport, ImportedHost};
+use crate::shell;
 use crate::store::hosts::{Host, SecretSource};
 
 const APP: &str = "Ásbrú";
@@ -170,7 +171,7 @@ pub(super) fn parse(text_yaml: &str) -> Result<ImportReport> {
             }
             _ => None,
         };
-        let ssh_args = match shell_split(&text(v, "options")) {
+        let ssh_args = match shell::split(&text(v, "options")) {
             Some(args) => args,
             None => {
                 report.warnings.push(format!(

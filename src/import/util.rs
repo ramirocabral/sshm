@@ -156,63 +156,6 @@ pub(super) fn printable_secret(bytes: Vec<u8>) -> Option<String> {
     (!s.chars().any(char::is_control)).then_some(s)
 }
 
-/// POSIX-shell-like word splitting (quotes and backslashes); `None` on an unterminated quote.
-pub(super) fn shell_split(s: &str) -> Option<Vec<String>> {
-    let mut words = Vec::new();
-    let mut cur = String::new();
-    let mut in_word = false;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' => {
-                in_word = true;
-                loop {
-                    match chars.next()? {
-                        '\'' => break,
-                        ch => cur.push(ch),
-                    }
-                }
-            }
-            '"' => {
-                in_word = true;
-                loop {
-                    match chars.next()? {
-                        '"' => break,
-                        '\\' => match chars.next()? {
-                            ch @ ('"' | '\\' | '$' | '`') => cur.push(ch),
-                            ch => {
-                                cur.push('\\');
-                                cur.push(ch);
-                            }
-                        },
-                        ch => cur.push(ch),
-                    }
-                }
-            }
-            '\\' => {
-                in_word = true;
-                if let Some(ch) = chars.next() {
-                    cur.push(ch);
-                }
-            }
-            c if c.is_whitespace() => {
-                if in_word {
-                    words.push(std::mem::take(&mut cur));
-                    in_word = false;
-                }
-            }
-            c => {
-                in_word = true;
-                cur.push(c);
-            }
-        }
-    }
-    if in_word {
-        words.push(cur);
-    }
-    Some(words)
-}
-
 /// Shell-style wildcard match with `*` and `?`.
 pub(super) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
@@ -284,12 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn split_and_match() {
-        assert_eq!(
-            shell_split(r#" -X -o "ConnectTimeout=10" -o 'A B' c\ d"#).unwrap(),
-            vec!["-X", "-o", "ConnectTimeout=10", "-o", "A B", "c d"]
-        );
-        assert!(shell_split("\"open").is_none());
+    fn wildcards() {
         assert!(wildcard_match("*.conf", "a.conf"));
         assert!(wildcard_match("web-?", "web-1"));
         assert!(!wildcard_match("*.conf", "a.conf.bak"));

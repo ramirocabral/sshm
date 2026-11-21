@@ -102,32 +102,22 @@ impl TextInput {
         true
     }
 
-    /// Draws the input on one line; returns the cursor position when focused.
+    /// Draws the input on one line, underlined when focused; returns the cursor position then.
     pub fn render(&self, area: Rect, buf: &mut Buffer, focused: bool, style: Style) -> Option<Position> {
-        if area.width == 0 {
-            return None;
-        }
-        let shown: Vec<char> = if self.masked { vec!['•'; self.value.chars().count()] } else { self.value.chars().collect() };
-        let width = area.width as usize;
-        let start = self.cursor.saturating_sub(width.saturating_sub(1));
-        let visible: String = shown.iter().skip(start).take(width).collect();
         let st = if focused { style.add_modifier(Modifier::UNDERLINED) } else { style };
         buf.set_style(area, st);
-        buf.set_stringn(area.x, area.y, &visible, width, st);
-        focused.then(|| Position::new(area.x + (self.cursor - start) as u16, area.y))
+        self.render_plain(area, buf, focused, st)
     }
-}
 
-impl TextInput {
     /// Like `render` but without decoration; the caller styles the background.
     pub fn render_plain(&self, area: Rect, buf: &mut Buffer, show_cursor: bool, style: Style) -> Option<Position> {
         if area.width == 0 {
             return None;
         }
-        let shown: Vec<char> = if self.masked { vec!['•'; self.value.chars().count()] } else { self.value.chars().collect() };
         let width = area.width as usize;
         let start = self.cursor.saturating_sub(width.saturating_sub(1));
-        let visible: String = shown.iter().skip(start).take(width).collect();
+        let visible: String =
+            if self.masked { "•".repeat(self.value.chars().count().saturating_sub(start).min(width)) } else { self.value.chars().skip(start).take(width).collect() };
         if !visible.is_empty() {
             buf.set_stringn(area.x, area.y, &visible, width, style);
         }
@@ -164,5 +154,20 @@ mod tests {
         assert_eq!(t.value, "xyolñ");
         t.handle_key(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         assert_eq!(t.value, "");
+    }
+
+    #[test]
+    fn renders_the_tail_and_masks() {
+        let area = Rect::new(0, 0, 4, 1);
+        let row = |buf: &Buffer| (0..4).map(|x| buf[(x, 0)].symbol().to_string()).collect::<String>();
+        let mut buf = Buffer::empty(area);
+        let cursor = TextInput::new("abcdef").render(area, &mut buf, true, Style::default());
+        assert_eq!((row(&buf), cursor), ("def ".to_string(), Some(Position::new(3, 0))));
+        assert!(buf[(0, 0)].modifier.contains(Modifier::UNDERLINED));
+        let mut pw = TextInput::masked();
+        pw.insert_str("secret");
+        let mut buf = Buffer::empty(area);
+        assert_eq!(pw.render_plain(area, &mut buf, false, Style::default()), None);
+        assert_eq!(row(&buf), "••• ");
     }
 }
