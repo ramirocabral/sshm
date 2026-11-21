@@ -335,7 +335,7 @@ pub fn help_entries(app: &App) -> Vec<HelpLine> {
         row("q".into(), "NORMAL: cancel"),
         row("Ctrl+j / Ctrl+k".into(), "move between fields in any mode (also Ctrl+n / Ctrl+p)"),
         row("j / k  ·  Ctrl+j / Ctrl+k".into(), "move in a list of choices (Ctrl+ while typing a filter)"),
-        row("Ctrl+S  ·  Save button".into(), "save / run"),
+        row("w  ·  Save button  ·  Ctrl+S".into(), "NORMAL: save / run (Ctrl+S only if the terminal lets it through)"),
         HelpLine::Blank,
         head("Help"),
         row("/".into(), "search the shortcuts"),

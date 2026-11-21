@@ -266,9 +266,16 @@ impl ThemeForm {
         let themes = crate::ui::theme::THEMES.iter().map(|t| Choice::new(t.name, t.name, t.description)).collect();
         let fields = vec![
             Field::select("theme", "Theme", themes, current)
-                .hint("Enter opens the list; the colors change as you move. Saved to config.toml"),
+                .hint("j/k in the list (or h/l here) shows each theme · Enter or w saves it to config.toml"),
         ];
-        ThemeForm { form: Form::new("Theme", "Save", fields), previous: current.to_string() }
+        let mut form = Form::new("Theme", "Save", fields);
+        form.open_popup();
+        ThemeForm { form, previous: current.to_string() }
+    }
+
+    /// The theme on screen: the one under the cursor while the list is open, else the picked one.
+    pub fn shown(&self) -> String {
+        self.form.highlighted().unwrap_or_else(|| self.form.value("theme"))
     }
 }
 

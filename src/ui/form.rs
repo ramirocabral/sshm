@@ -205,7 +205,10 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
     let keys = Line::from(vec![
         Span::styled(badge, badge_style),
         Span::styled(format!(" {action} · {moves} · "), Style::default().fg(colors().muted)),
-        Span::styled(format!("Ctrl+S {}", form.submit_label.to_lowercase()), Style::default().fg(colors().accent)),
+        Span::styled(
+            format!("{} {}", if insert { "Esc w" } else { "w" }, form.submit_label.to_lowercase()),
+            Style::default().fg(colors().accent),
+        ),
         Span::styled(quit.to_string(), Style::default().fg(colors().muted)),
     ]);
     f.render_widget(Paragraph::new(keys), Rect { x: inner.x, y: inner.bottom().saturating_sub(1), width: inner.width, height: 1 });

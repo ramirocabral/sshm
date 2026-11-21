@@ -1136,13 +1136,13 @@ impl App {
                 FormEvent::Submit => self.run_move(d),
                 _ => keep(self, Dialog::Move(d)),
             },
+            // Picking from the list saves at once: it is the only field.
             Dialog::Theme(mut d) => match d.form.handle_key(&key) {
                 FormEvent::Cancel => self.preview_theme(&d.previous),
                 FormEvent::Submit => self.save_theme(d),
-                ev => {
-                    if ev == FormEvent::Changed("theme") {
-                        self.preview_theme(&d.form.value("theme"));
-                    }
+                FormEvent::Changed(_) if d.form.popup.is_none() && key.code == KeyCode::Enter => self.save_theme(d),
+                _ => {
+                    self.preview_theme(&d.shown());
                     keep(self, Dialog::Theme(d));
                 }
             },
@@ -1441,10 +1441,8 @@ impl App {
             Some(Dialog::Move(d)) => act(&mut d.form),
             Some(Dialog::Theme(d)) => {
                 let ev = act(&mut d.form);
-                if ev == FormEvent::Changed("theme") {
-                    let name = d.form.value("theme");
-                    self.preview_theme(&name);
-                }
+                let name = d.shown();
+                self.preview_theme(&name);
                 ev
             }
             Some(Dialog::Help(h)) => {

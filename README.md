@@ -117,8 +117,8 @@ modes:
 filter). Folder, jump host and private key accept free text plus suggestions: your folders,
 your hosts and the keys in `~/.ssh`.
 
-Saving works with the **Save** button or `Ctrl+S`. Some terminals grab `Ctrl+S` (kitty
-setups often map it), so the button always works. The mouse works too.
+Save with `w` in NORMAL mode (like vim's `:w`; `Esc w` while typing), the **Save** button, or
+`Ctrl+S` where the terminal lets it through (kitty setups often map it). The mouse works too.
 
 In the help (`leader ?`), `/` searches the shortcuts, and `j`/`k`, `g`/`G` and
 `Ctrl+d`/`Ctrl+u` scroll. The palette and the host search move with `Ctrl+j`/`Ctrl+k`.

@@ -275,6 +275,12 @@ impl Form {
     }
 
     /// Picks the `n`th entry currently listed in the open popup.
+    /// The value under the cursor in the open popup.
+    pub fn highlighted(&self) -> Option<String> {
+        let p = self.popup.as_ref()?;
+        self.choices(p.field).get(p.selected).map(|c| c.value.clone())
+    }
+
     pub fn choose(&mut self, n: usize) -> FormEvent {
         let Some(p) = self.popup.take() else { return FormEvent::None };
         let value = match self.choices(p.field).get(n) {
@@ -486,6 +492,7 @@ impl Form {
                     FormEvent::None
                 }
                 KeyCode::Esc | KeyCode::Char('q') => self.request_cancel(),
+                KeyCode::Char('w') => FormEvent::Submit,
                 _ => FormEvent::None,
             };
         }
@@ -534,9 +541,10 @@ impl Form {
             return FormEvent::None;
         }
 
-        // Normal mode.
+        // Normal mode. w saves like vim's :w; Ctrl+S alone is not enough, terminals grab it.
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return self.request_cancel(),
+            KeyCode::Char('w') => return FormEvent::Submit,
             KeyCode::Char('j') => {
                 self.step(1);
                 return FormEvent::None;
@@ -687,6 +695,23 @@ mod tests {
         f.handle_key(&key(KeyCode::Up));
         assert_eq!(f.handle_key(&key(KeyCode::Enter)), FormEvent::Changed("src"));
         assert_eq!(f.value("src"), "vault");
+    }
+
+    #[test]
+    fn w_saves_in_normal_mode_only() {
+        let mut f = form();
+        assert_eq!(f.handle_key(&key(KeyCode::Char('w'))), FormEvent::Submit);
+        f.handle_key(&key(KeyCode::Char('i')));
+        assert_eq!(f.handle_key(&key(KeyCode::Char('w'))), FormEvent::None);
+        assert_eq!(f.value("name"), "webw");
+        f.handle_key(&key(KeyCode::Esc));
+        assert_eq!(f.handle_key(&key(KeyCode::Char('w'))), FormEvent::Submit);
+        f.handle_key(&key(KeyCode::Down));
+        f.handle_key(&key(KeyCode::Enter));
+        assert!(f.popup.is_some());
+        assert_eq!(f.highlighted().as_deref(), Some("none"));
+        f.handle_key(&key(KeyCode::Char('j')));
+        assert_eq!(f.highlighted().as_deref(), Some("op"));
     }
 
     #[test]
