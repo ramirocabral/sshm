@@ -62,7 +62,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(block, transfers);
         for (i, t) in view.transfers.iter().rev().take(6).enumerate() {
             let row = Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 };
-            let [label_r, gauge_r] = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(row);
             let arrow = if t.upload { "↑" } else { "↓" };
             let (state, color) = match &t.state {
                 TransferState::Queued => ("queued".to_string(), colors().subtle),
@@ -71,8 +70,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                     (format!("{}/s", human((t.done as f64 / secs) as u64)), colors().accent)
                 }
                 TransferState::Done => ("done".to_string(), colors().success),
-                TransferState::Failed(e) => (format!("error: {e}"), colors().error),
+                TransferState::Failed(e) => {
+                    let label = format!("{arrow} {} · failed: {e}", t.label);
+                    f.buffer_mut().set_stringn(row.x, row.y, &label, row.width as usize, Style::default().fg(colors().error));
+                    continue;
+                }
             };
+            let [label_r, gauge_r] = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(row);
             let label = format!("{arrow} {} · {} / {} · {state}", t.label, human(t.done), human(t.total));
             f.buffer_mut().set_stringn(label_r.x, label_r.y, &label, label_r.width as usize, Style::default().fg(color));
             let ratio = if t.total == 0 { if t.state == TransferState::Done { 1.0 } else { 0.0 } } else { (t.done as f64 / t.total as f64).min(1.0) };

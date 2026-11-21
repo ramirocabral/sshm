@@ -7,6 +7,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
 use russh_sftp::client::SftpSession;
+use russh_sftp::client::error::Error as SftpError;
+use russh_sftp::protocol::{Status, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -147,6 +149,82 @@ pub fn parent_remote(dir: &str) -> String {
     }
 }
 
+/// Readable text for an SFTP error. Servers usually send just the status name ("Failure").
+pub fn describe(e: &SftpError) -> String {
+    let SftpError::Status(st) = e else { return e.to_string() };
+    let generic = match st.status_code {
+        StatusCode::Ok => "ok",
+        StatusCode::Eof => "unexpected end of file",
+        StatusCode::NoSuchFile => "no such file or directory",
+        StatusCode::PermissionDenied => "permission denied",
+        StatusCode::Failure => "the server refused without giving a reason",
+        StatusCode::BadMessage => "the server rejected the request as malformed",
+        StatusCode::NoConnection | StatusCode::ConnectionLost => "connection lost",
+        StatusCode::OpUnsupported => "not supported by the server",
+    };
+    let msg = st.error_message.trim();
+    let bare = msg.is_empty()
+        || msg.eq_ignore_ascii_case(&st.status_code.to_string())
+        || (st.status_code == StatusCode::Eof && msg.eq_ignore_ascii_case("end of file"));
+    if bare { generic.into() } else { msg.into() }
+}
+
+const ST_RDONLY: u64 = 0x1;
+
+/// Why a change inside the remote `dir` failed. OpenSSH reports a read-only or full
+/// filesystem as a bare "Failure", so statvfs is asked when the server supports it.
+async fn write_error(s: &SftpSession, dir: &str, e: SftpError) -> String {
+    if let SftpError::Status(st) = &e
+        && st.status_code == StatusCode::Failure
+        && let Ok(Some(fs)) = s.fs_info(dir).await
+    {
+        if fs.flags & ST_RDONLY != 0 {
+            return "read-only filesystem".into();
+        }
+        if fs.blocks_avail == 0 {
+            return "no space left on the device".into();
+        }
+    }
+    describe(&e)
+}
+
+const STATUS_CODES: [StatusCode; 9] = [
+    StatusCode::Ok,
+    StatusCode::Eof,
+    StatusCode::NoSuchFile,
+    StatusCode::PermissionDenied,
+    StatusCode::Failure,
+    StatusCode::BadMessage,
+    StatusCode::NoConnection,
+    StatusCode::ConnectionLost,
+    StatusCode::OpUnsupported,
+];
+
+/// The SFTP status behind an io::Error from a remote file: either wrapped, or only the
+/// server's message.
+fn status_of(e: &std::io::Error) -> Option<SftpError> {
+    match e.get_ref().and_then(|i| i.downcast_ref::<SftpError>()) {
+        Some(SftpError::Status(st)) => Some(SftpError::Status(st.clone())),
+        Some(_) => None,
+        None => {
+            let msg = e.to_string();
+            let status_code = STATUS_CODES.into_iter().find(|c| c.to_string() == msg)?;
+            Some(SftpError::Status(Status { id: 0, status_code, error_message: msg, language_tag: String::new() }))
+        }
+    }
+}
+
+fn describe_io(e: &std::io::Error) -> String {
+    status_of(e).map(|s| describe(&s)).unwrap_or_else(|| e.to_string())
+}
+
+async fn io_error(s: &SftpSession, dir: &str, e: std::io::Error) -> String {
+    match status_of(&e) {
+        Some(se) => write_error(s, dir, se).await,
+        None => e.to_string(),
+    }
+}
+
 fn list_local(dir: &str) -> Result<Vec<Entry>, String> {
     let rd = std::fs::read_dir(dir).map_err(|e| format!("{dir}: {e}"))?;
     let mut out = Vec::new();
@@ -167,7 +245,7 @@ fn list_local(dir: &str) -> Result<Vec<Entry>, String> {
 }
 
 async fn list_remote(s: &SftpSession, dir: &str) -> Result<Vec<Entry>, String> {
-    let rd = s.read_dir(dir).await.map_err(|e| format!("{dir}: {e}"))?;
+    let rd = s.read_dir(dir).await.map_err(|e| format!("{dir}: {}", describe(&e)))?;
     let mut out = Vec::new();
     for e in rd {
         let name = e.file_name();
@@ -596,9 +674,13 @@ impl App {
         let Some(view) = self.sftp_view(tab) else { return };
         if remote {
             let Some(s) = view.session.clone() else { return };
-            let path = join_remote(&view.remote.cwd, &name);
+            let cwd = view.remote.cwd.clone();
+            let path = join_remote(&cwd, &name);
             tokio::spawn(async move {
-                let result = s.create_dir(path.clone()).await.map(|_| format!("Folder created: {path}")).map_err(|e| e.to_string());
+                let result = match s.create_dir(path.clone()).await {
+                    Ok(_) => Ok(format!("Folder created: {path}")),
+                    Err(e) => Err(format!("{path}: {}", write_error(&s, &cwd, e).await)),
+                };
                 send(&tx, tab, SftpEvent::OpDone { result });
             });
         } else {
@@ -616,10 +698,14 @@ impl App {
         let Some(view) = self.sftp_view(tab) else { return };
         if remote {
             let Some(s) = view.session.clone() else { return };
-            let a = join_remote(&view.remote.cwd, &from);
-            let b = if to.starts_with('/') { to.clone() } else { join_remote(&view.remote.cwd, &to) };
+            let cwd = view.remote.cwd.clone();
+            let a = join_remote(&cwd, &from);
+            let b = if to.starts_with('/') { to.clone() } else { join_remote(&cwd, &to) };
             tokio::spawn(async move {
-                let result = s.rename(a, b.clone()).await.map(|_| format!("Renamed to {b}")).map_err(|e| e.to_string());
+                let result = match s.rename(a.clone(), b.clone()).await {
+                    Ok(_) => Ok(format!("Renamed to {b}")),
+                    Err(e) => Err(format!("{a}: {}", write_error(&s, &cwd, e).await)),
+                };
                 send(&tx, tab, SftpEvent::OpDone { result });
             });
         } else {
@@ -692,9 +778,9 @@ impl App {
 
 fn remove_remote<'a>(s: &'a SftpSession, path: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
-        let meta = s.symlink_metadata(path).await.map_err(|e| e.to_string())?;
-        if meta.is_dir() {
-            let entries = s.read_dir(path).await.map_err(|e| e.to_string())?;
+        let meta = s.symlink_metadata(path).await.map_err(|e| describe(&e))?;
+        let removed = if meta.is_dir() {
+            let entries = s.read_dir(path).await.map_err(|e| describe(&e))?;
             for e in entries {
                 let name = e.file_name();
                 if name == "." || name == ".." {
@@ -702,9 +788,13 @@ fn remove_remote<'a>(s: &'a SftpSession, path: &'a str) -> std::pin::Pin<Box<dyn
                 }
                 remove_remote(s, &join_remote(path, &name)).await?;
             }
-            s.remove_dir(path).await.map_err(|e| e.to_string())
+            s.remove_dir(path).await
         } else {
-            s.remove_file(path).await.map_err(|e| e.to_string())
+            s.remove_file(path).await
+        };
+        match removed {
+            Ok(()) => Ok(()),
+            Err(e) => Err(write_error(s, &parent_remote(path), e).await),
         }
     })
 }
@@ -751,9 +841,12 @@ fn upload_rec<'a>(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
         let meta = std::fs::metadata(local).map_err(|e| format!("{}: {e}", local.display()))?;
+        let parent = parent_remote(remote);
         if meta.is_dir() {
-            if !s.try_exists(remote).await.unwrap_or(false) {
-                s.create_dir(remote).await.map_err(|e| format!("{remote}: {e}"))?;
+            if !s.try_exists(remote).await.unwrap_or(false)
+                && let Err(e) = s.create_dir(remote).await
+            {
+                return Err(format!("{remote}: {}", write_error(s, &parent, e).await));
             }
             let entries: Vec<_> = std::fs::read_dir(local).map_err(|e| e.to_string())?.flatten().collect();
             for e in entries {
@@ -763,17 +856,24 @@ fn upload_rec<'a>(
             return Ok(());
         }
         let mut src = tokio::fs::File::open(local).await.map_err(|e| format!("{}: {e}", local.display()))?;
-        let mut dst = s.create(remote).await.map_err(|e| format!("{remote}: {e}"))?;
+        let mut dst = match s.create(remote).await {
+            Ok(f) => f,
+            Err(e) => return Err(format!("{remote}: {}", write_error(s, &parent, e).await)),
+        };
         let mut buf = vec![0u8; 128 * 1024];
         loop {
             let n = src.read(&mut buf).await.map_err(|e| e.to_string())?;
             if n == 0 {
                 break;
             }
-            dst.write_all(&buf[..n]).await.map_err(|e| format!("{remote}: {e}"))?;
+            if let Err(e) = dst.write_all(&buf[..n]).await {
+                return Err(format!("{remote}: {}", io_error(s, &parent, e).await));
+            }
             prog.add(n as u64);
         }
-        dst.shutdown().await.map_err(|e| format!("{remote}: {e}"))?;
+        if let Err(e) = dst.shutdown().await {
+            return Err(format!("{remote}: {}", io_error(s, &parent, e).await));
+        }
         Ok(())
     })
 }
@@ -815,30 +915,37 @@ fn download_rec<'a>(
     prog: &'a mut Progress<'_>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
-        let meta = s.metadata(remote).await.map_err(|e| format!("{remote}: {e}"))?;
+        let meta = s.metadata(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
         if meta.is_dir() {
             std::fs::create_dir_all(local).map_err(|e| format!("{}: {e}", local.display()))?;
-            let rd = s.read_dir(remote).await.map_err(|e| format!("{remote}: {e}"))?;
+            let rd = s.read_dir(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
             let names: Vec<String> = rd.map(|e| e.file_name()).filter(|n| n != "." && n != "..").collect();
             for name in names {
                 download_rec(s, &join_remote(remote, &name), &local.join(&name), prog).await?;
             }
             return Ok(());
         }
-        let mut src = s.open(remote).await.map_err(|e| format!("{remote}: {e}"))?;
+        let mut src = s.open(remote).await.map_err(|e| format!("{remote}: {}", describe(&e)))?;
         let tmp = local.with_extension("sshm-part");
-        let mut dst = tokio::fs::File::create(&tmp).await.map_err(|e| format!("{}: {e}", tmp.display()))?;
-        let mut buf = vec![0u8; 128 * 1024];
-        loop {
-            let n = src.read(&mut buf).await.map_err(|e| format!("{remote}: {e}"))?;
-            if n == 0 {
-                break;
+        let mut dst = tokio::fs::File::create(&tmp).await.map_err(|e| format!("{}: {e}", local.display()))?;
+        let copied = async {
+            let mut buf = vec![0u8; 128 * 1024];
+            loop {
+                let n = src.read(&mut buf).await.map_err(|e| format!("{remote}: {}", describe_io(&e)))?;
+                if n == 0 {
+                    break;
+                }
+                dst.write_all(&buf[..n]).await.map_err(|e| format!("{}: {e}", local.display()))?;
+                prog.add(n as u64);
             }
-            dst.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
-            prog.add(n as u64);
+            dst.flush().await.map_err(|e| format!("{}: {e}", local.display()))
         }
-        dst.flush().await.map_err(|e| e.to_string())?;
+        .await;
         drop(dst);
+        if let Err(e) = copied {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(e);
+        }
         tokio::fs::rename(&tmp, local).await.map_err(|e| format!("{}: {e}", local.display()))?;
         Ok(())
     })
@@ -855,5 +962,23 @@ mod tests {
         assert_eq!(join_remote("/home/u", ".."), "/home");
         assert_eq!(parent_remote("/home"), "/");
         assert_eq!(parent_remote("/"), "/");
+    }
+
+    fn status(status_code: StatusCode, msg: &str) -> SftpError {
+        SftpError::Status(Status { id: 1, status_code, error_message: msg.into(), language_tag: String::new() })
+    }
+
+    #[test]
+    fn readable_errors() {
+        assert_eq!(describe(&status(StatusCode::Failure, "Failure")), "the server refused without giving a reason");
+        assert_eq!(describe(&status(StatusCode::PermissionDenied, "Permission denied")), "permission denied");
+        assert_eq!(describe(&status(StatusCode::NoSuchFile, "")), "no such file or directory");
+        assert_eq!(describe(&status(StatusCode::Eof, "End of file")), "unexpected end of file");
+        assert_eq!(describe(&status(StatusCode::Failure, "Quota exceeded")), "Quota exceeded");
+
+        let wrapped = std::io::Error::from(status(StatusCode::PermissionDenied, "Permission denied"));
+        assert_eq!(describe_io(&wrapped), "permission denied");
+        assert_eq!(describe_io(&std::io::Error::other("Failure")), "the server refused without giving a reason");
+        assert_eq!(describe_io(&std::io::Error::other("file size unknown")), "file size unknown");
     }
 }
