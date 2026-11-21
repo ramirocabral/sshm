@@ -6,9 +6,9 @@ An SSH session manager that runs in your terminal, in the spirit of MobaXterm or
 
 ## Features
 
-- **Host book** with folders, tags and fuzzy search, kept in a plain `hosts.toml`.
+- **Host book** with folders, tags and fuzzy search.
 - **Saved passwords** from the desktop keyring, an encrypted vault (age), Bitwarden, 1Password
-  or any command. They answer ssh's password prompt on connect, and `sudo` prompts later on.
+  or any command
 - **Plain `ssh` underneath**: `~/.ssh/config`, ProxyJump, ssh-agent and FIDO keys work as usual.
 - **Many sessions at once**: tabs, an automatic grid of panes, and broadcast to type into all of
   them.
@@ -18,22 +18,52 @@ An SSH session manager that runs in your terminal, in the spirit of MobaXterm or
   bundle that carries the passwords.
 - **Vim keys everywhere**, mouse support and seven color themes.
 
-It runs in any terminal emulator on any Linux distribution.
-
 | SFTP | Editing a host |
 |---|---|
 | ![SFTP browser](docs/screenshots/sftp.png) | ![Host form with the password sources](docs/screenshots/host-form.png) |
 
 ## Install
 
+Install dependencies (Rust 1.89+ to build, OpenSSH 8.4+ to run):
+
 ```sh
-git clone https://github.com/ramirocabral/sshm && cd sshm
-./install.sh            # builds and installs ~/.local/bin/sshm
+# Arch
+sudo pacman -S --needed rust gcc openssh git
+
+# Debian, Ubuntu
+sudo apt install build-essential openssh-client git curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Fedora, RHEL, AlmaLinux, Rocky
+sudo dnf install gcc openssh-clients git curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-You need Rust 1.89+ to build it and OpenSSH 8.4+ to run it. `install.sh` never installs
-packages: it tells you what is missing and the command for your distro. Optional extras are
-`secret-tool` (keyring), `wl-copy`/`xclip`/`xsel` (clipboard) and `bw`/`rbw`/`op`.
+Optional: `secret-tool` to keep passwords in the desktop keyring, and a clipboard tool
+(`wl-clipboard` on Wayland, `xclip` on X11). The `bw`, `rbw` and `op` CLIs are only needed by
+hosts that take their password from Bitwarden or 1Password.
+
+```sh
+sudo pacman -S --needed libsecret wl-clipboard    # Arch
+sudo apt install libsecret-tools wl-clipboard     # Debian, Ubuntu
+sudo dnf install libsecret wl-clipboard           # Fedora (on RHEL, wl-clipboard is in EPEL)
+```
+
+Build and install to `~/.local/bin` (`PREFIX=/some/dir` installs somewhere else):
+
+```sh
+git clone https://github.com/ramirocabral/sshm && cd sshm
+./install.sh
+```
+
+`install.sh` checks the dependencies but never installs packages. On other distros it prints
+the command for yours.
+
+Uninstall (your hosts and vault are kept):
+
+```sh
+./install.sh --uninstall
+```
 
 ## Usage
 

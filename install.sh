@@ -69,6 +69,15 @@ libsecret_pkg() {
     esac
 }
 
+cc_pkg() {
+    case "$(pkg_manager)" in
+        apt-get) echo build-essential ;;
+        apk) echo build-base ;;
+        emerge) echo sys-devel/gcc ;;
+        *) echo gcc ;;
+    esac
+}
+
 openssh_pkg() {
     case "$(pkg_manager)" in
         pacman | apk | xbps-install | zypper) echo openssh ;;
@@ -93,6 +102,12 @@ check_deps() {
         warn "Rust (cargo) not found: it is needed to build sshm."
         say "  Recommended: rustup from https://rustup.rs (works on every distro)"
         say "  Or: $(hint "$(rust_pkg)")  (the distro package must be $MIN_RUST or newer)"
+        missing=1
+    fi
+
+    if ! have cc; then
+        warn "no C linker (cc) found: Rust needs one to link sshm."
+        say "  $(hint "$(cc_pkg)")"
         missing=1
     fi
 
