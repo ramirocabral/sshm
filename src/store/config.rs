@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -72,15 +73,8 @@ impl Config {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         let value = toml::Value::String(name.to_string()).to_string();
         let new = set_top_level_key(&text, "theme", &value);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, new).with_context(|| format!("writing {}", tmp.display()))?;
-        if let Ok(meta) = std::fs::metadata(&path) {
-            std::fs::set_permissions(&tmp, meta.permissions()).ok();
-        }
-        std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
+        let mode = std::fs::metadata(&path).map(|m| m.permissions().mode() & 0o7777).unwrap_or(0o644);
+        paths::write_atomic(&path, new.as_bytes(), mode)
     }
 
     pub fn leader_key(&self) -> KeySpec {

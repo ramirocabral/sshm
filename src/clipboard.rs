@@ -3,6 +3,8 @@ use std::process::{Command, Stdio};
 
 use base64::Engine;
 
+use crate::paths::in_path;
+
 /// Copies via OSC 52 (works over SSH and in most terminals) and, when available, a local tool.
 pub fn copy(text: &str, override_cmd: Option<&str>) {
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
@@ -44,10 +46,4 @@ fn detect_tool() -> Option<String> {
         return Some("xsel --clipboard --input".into());
     }
     None
-}
-
-pub fn in_path(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|p| p.join(program).is_file()))
-        .unwrap_or(false)
 }

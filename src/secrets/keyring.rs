@@ -3,9 +3,8 @@
 //! Entries carry the attributes application=sshm, host=<host id>, kind=password|root_password.
 //! All of these block (the keyring may ask to be unlocked): call them off the UI thread.
 
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -13,15 +12,12 @@ use super::SecretKind;
 
 const TOOL: &str = "secret-tool";
 
+/// Unlocking the keyring may pop up a password prompt, so this waits longer than other sources.
+const TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Whether `secret-tool` is installed (somewhere in PATH).
 pub fn available() -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| is_executable(&dir.join(TOOL))))
-}
-
-fn is_executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    crate::paths::in_path(TOOL)
 }
 
 fn kind_name(kind: SecretKind) -> &'static str {
@@ -37,17 +33,12 @@ fn attributes(host_id: &str, kind: SecretKind) -> Vec<String> {
 }
 
 fn run(args: &[String], input: Option<&str>) -> Result<std::process::Output> {
-    let mut child = Command::new(TOOL)
-        .args(args)
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let output = super::run_with_timeout(Command::new(TOOL).args(args), input.map(str::as_bytes), TIMEOUT)
         .with_context(|| format!("could not run `{TOOL}`: install libsecret (it provides {TOOL})"))?;
-    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin.write_all(text.as_bytes()).with_context(|| format!("writing to `{TOOL}`"))?;
+    match output {
+        Some(o) => Ok(o),
+        None => bail!("`{TOOL}` did not answer within {} s — is the keyring waiting to be unlocked?", TIMEOUT.as_secs()),
     }
-    child.wait_with_output().with_context(|| format!("waiting for `{TOOL}`"))
 }
 
 fn failure(what: &str, output: &std::process::Output) -> anyhow::Error {

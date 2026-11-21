@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -23,11 +23,11 @@ impl UiState {
         Self::load_from(&Self::path())
     }
 
-    pub fn load_from(path: &PathBuf) -> Self {
+    pub fn load_from(path: &Path) -> Self {
         std::fs::read_to_string(path).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default()
     }
 
-    pub fn save_to(&self, path: &PathBuf) -> Result<()> {
+    pub fn save_to(&self, path: &Path) -> Result<()> {
         paths::write_private(path, toml::to_string_pretty(self)?.as_bytes())
     }
 }

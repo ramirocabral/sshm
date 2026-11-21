@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,9 @@ use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 
 use super::command::{ENV_SOCK, ENV_TOKEN};
+
+const ACCEPT_BACKOFF_MIN: Duration = Duration::from_millis(50);
+const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
 #[derive(Serialize, Deserialize)]
 struct Request {
@@ -73,8 +77,23 @@ pub fn start_server(dir: &std::path::Path, tx: mpsc::UnboundedSender<AskPassRequ
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
     }
     tokio::spawn(async move {
+        let mut backoff = ACCEPT_BACKOFF_MIN;
         loop {
-            let Ok((stream, _)) = listener.accept().await else { continue };
+            let stream = match listener.accept().await {
+                Ok((stream, _)) => {
+                    backoff = ACCEPT_BACKOFF_MIN;
+                    stream
+                }
+                Err(e) => {
+                    // E.g. EMFILE: retrying at once would spin.
+                    if backoff == ACCEPT_BACKOFF_MIN {
+                        tracing::warn!("askpass socket: accept failed: {e}");
+                    }
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(ACCEPT_BACKOFF_MAX);
+                    continue;
+                }
+            };
             let tx = tx.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();

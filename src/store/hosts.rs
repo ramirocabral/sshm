@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -145,7 +146,7 @@ impl Default for Host {
 impl Host {
     pub fn display_target(&self) -> String {
         let mut s = String::new();
-        if let Some(u) = &self.user {
+        if let Some(u) = self.user.as_ref().filter(|u| !u.is_empty()) {
             s.push_str(u);
             s.push('@');
         }
@@ -208,16 +209,49 @@ pub fn new_id() -> String {
     (0..16).map(|_| format!("{:x}", rng.random_range(0..16u8))).collect()
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct HostsFile {
     #[serde(default, rename = "host")]
     hosts: Vec<Host>,
+}
+
+#[derive(Serialize)]
+struct HostsFileRef<'a> {
+    #[serde(rename = "host")]
+    hosts: &'a [Host],
+}
+
+/// Three-way merge of one item: our change wins, else whatever the other side has now.
+pub(crate) fn merge3<T: Clone + PartialEq>(base: Option<&T>, ours: Option<&T>, theirs: Option<&T>) -> Option<T> {
+    if ours != base { ours.cloned() } else { theirs.cloned() }
+}
+
+/// Merges by host id: hosts this instance added, changed or deleted since `base` keep its
+/// version; every other host takes the one on disk (`theirs`).
+fn merge_hosts(base: &[Host], ours: &[Host], theirs: &[Host]) -> Vec<Host> {
+    let index = |hs: &[Host]| hs.iter().map(|h| (h.id.clone(), h.clone())).collect::<HashMap<_, _>>();
+    let (b, o, t) = (index(base), index(ours), index(theirs));
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for id in ours.iter().chain(theirs).chain(base).map(|h| h.id.as_str()) {
+        if seen.insert(id)
+            && let Some(h) = merge3(b.get(id), o.get(id), t.get(id))
+        {
+            out.push(h);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Default)]
 pub struct HostStore {
     pub hosts: Vec<Host>,
     path: PathBuf,
+    /// The hosts as this instance last read or wrote them: the base of merges with other instances.
+    base: Vec<Host>,
+    disk: Option<paths::Fingerprint>,
+    /// A version on disk that failed to parse, so the tick does not report it again.
+    unreadable: Option<paths::Fingerprint>,
 }
 
 impl HostStore {
@@ -230,26 +264,69 @@ impl HostStore {
     }
 
     pub fn load(path: PathBuf) -> Result<Self> {
-        if !path.exists() {
-            return Ok(HostStore { hosts: Vec::new(), path });
+        let mut store = HostStore { path, ..HostStore::default() };
+        if let Some((hosts, fp)) = store.read_disk()? {
+            store.hosts = hosts;
+            store.sort();
+            store.base = store.hosts.clone();
+            store.disk = Some(fp);
         }
-        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let file: HostsFile = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        let mut store = HostStore { hosts: file.hosts, path };
-        store.sort();
         Ok(store)
     }
 
-    pub fn save(&self) -> Result<()> {
-        let file = HostsFile { hosts: self.hosts.clone() };
-        let text = toml::to_string_pretty(&file)?;
-        paths::write_private(&self.path, text.as_bytes())
+    /// The hosts on disk and their fingerprint, or None when there is no file.
+    fn read_disk(&self) -> Result<Option<(Vec<Host>, paths::Fingerprint)>> {
+        let Some(fp) = paths::fingerprint(&self.path) else { return Ok(None) };
+        let text = std::fs::read_to_string(&self.path).with_context(|| format!("reading {}", self.path.display()))?;
+        let file: HostsFile = toml::from_str(&text).with_context(|| format!("parsing {}", self.path.display()))?;
+        Ok(Some((file.hosts, fp)))
+    }
+
+    /// Writes the hosts. If another instance saved in the meantime, its changes are merged in
+    /// first (see `merge_hosts`), so neither side loses work.
+    pub fn save(&mut self) -> Result<()> {
+        let _lock = paths::lock_for(&self.path)?;
+        if paths::fingerprint(&self.path) != self.disk
+            && let Some((theirs, _)) = self.read_disk().context("hosts.toml changed on disk and cannot be read; not saved")?
+        {
+            self.hosts = merge_hosts(&self.base, &self.hosts, &theirs);
+            self.sort();
+        }
+        let text = toml::to_string_pretty(&HostsFileRef { hosts: &self.hosts })?;
+        paths::write_private(&self.path, text.as_bytes())?;
+        self.base = self.hosts.clone();
+        self.disk = paths::fingerprint(&self.path);
+        self.unreadable = None;
+        Ok(())
+    }
+
+    /// Adopts what another sshm instance (or a hand edit) changed in the file, keeping this
+    /// instance's unsaved changes. Returns whether the host list changed; only a stat when nothing did.
+    #[allow(dead_code)]
+    pub fn reload_if_changed(&mut self) -> Result<bool> {
+        let fp = paths::fingerprint(&self.path);
+        if fp.is_none() || fp == self.disk || fp == self.unreadable {
+            return Ok(false);
+        }
+        let (theirs, fp) = match self.read_disk() {
+            Ok(Some(v)) => v,
+            Ok(None) => return Ok(false),
+            Err(e) => {
+                self.unreadable = fp;
+                return Err(e);
+            }
+        };
+        let before = std::mem::take(&mut self.hosts);
+        self.hosts = merge_hosts(&self.base, &before, &theirs);
+        self.sort();
+        self.base = theirs;
+        self.disk = Some(fp);
+        self.unreadable = None;
+        Ok(before != self.hosts)
     }
 
     pub fn sort(&mut self) {
-        self.hosts.sort_by(|a, b| {
-            a.folder.to_lowercase().cmp(&b.folder.to_lowercase()).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
+        self.hosts.sort_by_cached_key(|h| (h.folder.to_lowercase(), h.name.to_lowercase()));
     }
 
     pub fn get(&self, id: &str) -> Option<&Host> {
@@ -402,6 +479,68 @@ mod tests {
         assert_eq!(store.move_hosts(&ids, "z/w"), 2);
         let paths: Vec<String> = store.hosts.iter().map(Host::path).collect();
         assert_eq!(paths, ["y/b", "z/w/a", "z/w/c"]);
+    }
+
+    fn host(name: &str) -> Host {
+        Host { name: name.into(), host: format!("{name}.local"), ..Host::default() }
+    }
+
+    fn names(store: &HostStore) -> Vec<String> {
+        store.hosts.iter().map(|h| h.name.clone()).collect()
+    }
+
+    #[test]
+    fn two_instances_merge_on_save_and_reload() {
+        let dir = std::env::temp_dir().join(format!("sshm-merge-{}", new_id()));
+        let path = dir.join("hosts.toml");
+        let mut seed = HostStore::load(path.clone()).unwrap();
+        for n in ["keep", "gone", "edited"] {
+            seed.upsert(host(n));
+        }
+        seed.save().unwrap();
+
+        let mut a = HostStore::load(path.clone()).unwrap();
+        let mut b = HostStore::load(path.clone()).unwrap();
+        a.upsert(host("from-a"));
+        let gone = a.hosts.iter().find(|h| h.name == "gone").unwrap().id.clone();
+        a.remove(&gone);
+        a.save().unwrap();
+
+        b.upsert(host("from-b"));
+        let edited = b.hosts.iter_mut().find(|h| h.name == "edited").unwrap();
+        edited.port = Some(2200);
+        b.save().unwrap();
+        assert_eq!(names(&b), ["edited", "from-a", "from-b", "keep"]);
+        assert_eq!(names(&HostStore::load(path.clone()).unwrap()), names(&b));
+
+        // a picks up b's work without a save; its own unsaved change survives.
+        a.upsert(host("unsaved"));
+        assert!(a.reload_if_changed().unwrap());
+        assert!(!a.reload_if_changed().unwrap());
+        assert_eq!(names(&a), ["edited", "from-a", "from-b", "keep", "unsaved"]);
+        assert_eq!(a.hosts.iter().find(|h| h.name == "edited").unwrap().port, Some(2200));
+
+        // b deletes a's host; a saving keeps the deletion and adds its own.
+        let from_a = b.hosts.iter().find(|h| h.name == "from-a").unwrap().id.clone();
+        b.remove(&from_a);
+        b.save().unwrap();
+        a.save().unwrap();
+        assert_eq!(names(&HostStore::load(path.clone()).unwrap()), ["edited", "from-b", "keep", "unsaved"]);
+
+        // A broken hand edit is reported once and never overwritten by a save.
+        std::fs::write(&path, "host = 3").unwrap();
+        assert!(a.reload_if_changed().is_err());
+        assert!(!a.reload_if_changed().unwrap());
+        assert!(a.save().is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "host = 3");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn display_target_skips_an_empty_user() {
+        let h = Host { host: "srv".into(), user: Some(String::new()), port: Some(22), ..Host::default() };
+        assert_eq!(h.display_target(), "srv:22");
+        assert_eq!(Host { user: Some("me".into()), ..h }.display_target(), "me@srv:22");
     }
 
     #[test]

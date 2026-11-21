@@ -382,13 +382,23 @@ mod tests {
     fn bundle_roundtrip() {
         let tmp = TempDir::new();
         let (store, vault) = sample(&tmp);
-        assert!(export(&store, Some(&vault), ExportFormat::Bundle, false, None).is_err());
-        let bytes = export(&store, Some(&vault), ExportFormat::Bundle, false, Some("bundle-pass")).unwrap();
+        assert!(export(&store, Some(&vault), ExportFormat::Bundle, true, None).is_err());
+        let bytes = export(&store, Some(&vault), ExportFormat::Bundle, true, Some("bundle-pass")).unwrap();
         assert!(bytes.starts_with(b"age-encryption.org/v1"));
         assert!(import_bytes(Source::Bundle, &bytes, Some("wrong")).is_err());
         assert!(import_bytes(Source::Bundle, &bytes, None).is_err());
         let report = import_bytes(Source::Bundle, &bytes, Some("bundle-pass")).unwrap();
         assert_roundtrip(report, &store, &vault, true);
+    }
+
+    #[test]
+    fn bundle_without_secrets_leaves_them_out() {
+        let tmp = TempDir::new();
+        let (store, vault) = sample(&tmp);
+        let bytes = export(&store, Some(&vault), ExportFormat::Bundle, false, Some("bundle-pass")).unwrap();
+        let report = import_bytes(Source::Bundle, &bytes, Some("bundle-pass")).unwrap();
+        assert_eq!(report.hosts.len(), store.hosts.len());
+        assert!(report.hosts.iter().all(|h| !h.has_secrets()));
     }
 
     #[test]

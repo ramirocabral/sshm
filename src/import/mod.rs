@@ -225,8 +225,8 @@ pub enum ExportFormat {
     Bundle,
 }
 
-/// Bundle = JSON (hosts + secrets) encrypted with age scrypt via secrets::vault::encrypt_with; it carries the secrets
-/// whenever the vault is unlocked. JSON/CSV include secrets only when with_secrets && vault unlocked.
+/// Bundle = JSON encrypted with age scrypt via secrets::vault::encrypt_with. Every format
+/// includes the secrets only when with_secrets is set (and then the vault must be unlocked).
 pub fn export(
     store: &HostStore,
     vault: Option<&Vault>,
@@ -238,10 +238,11 @@ pub fn export(
     if with_secrets && unlocked.is_none() {
         bail!("the vault is locked; unlock it to export secrets");
     }
+    let secrets = unlocked.filter(|_| with_secrets);
     match format {
-        ExportFormat::Json => native::export_json(&store.hosts, unlocked.filter(|_| with_secrets)),
-        ExportFormat::Csv => native::export_csv(&store.hosts, unlocked.filter(|_| with_secrets)),
-        ExportFormat::Bundle => native::export_bundle(&store.hosts, unlocked, passphrase),
+        ExportFormat::Json => native::export_json(&store.hosts, secrets),
+        ExportFormat::Csv => native::export_csv(&store.hosts, secrets),
+        ExportFormat::Bundle => native::export_bundle(&store.hosts, secrets, passphrase),
     }
 }
 
