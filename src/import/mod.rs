@@ -25,18 +25,11 @@ pub struct ImportedHost {
 
 impl ImportedHost {
     pub fn new(host: Host) -> Self {
-        ImportedHost {
-            host,
-            password: None,
-            root_password: None,
-            passphrase: None,
-        }
+        ImportedHost { host, password: None, root_password: None, passphrase: None }
     }
 
     pub fn has_secrets(&self) -> bool {
-        [&self.password, &self.root_password, &self.passphrase]
-            .iter()
-            .any(|s| s.as_deref().is_some_and(|v| !v.is_empty()))
+        [&self.password, &self.root_password, &self.passphrase].iter().any(|s| s.as_deref().is_some_and(|v| !v.is_empty()))
     }
 }
 
@@ -97,26 +90,16 @@ fn warn_local_commands(report: &mut ImportReport) {
     for item in &report.hosts {
         let h = &item.host;
         let mut what = Vec::new();
-        if [&h.password, &h.root_password]
-            .iter()
-            .any(|s| matches!(s, SecretSource::Command { .. }))
-        {
+        if [&h.password, &h.root_password].iter().any(|s| matches!(s, SecretSource::Command { .. })) {
             what.push("cmd:");
         }
         for opt in ["ProxyCommand", "LocalCommand"] {
-            if h.ssh_args
-                .iter()
-                .any(|a| a.to_ascii_lowercase().contains(&opt.to_ascii_lowercase()))
-            {
+            if h.ssh_args.iter().any(|a| a.to_ascii_lowercase().contains(&opt.to_ascii_lowercase())) {
                 what.push(opt);
             }
         }
         if !what.is_empty() {
-            report.warnings.push(format!(
-                "'{}' runs local commands ({}); review it before connecting",
-                h.path(),
-                what.join(", ")
-            ));
+            report.warnings.push(format!("'{}' runs local commands ({}); review it before connecting", h.path(), what.join(", ")));
         }
     }
 }
@@ -144,12 +127,7 @@ pub struct MergeSummary {
 /// Conflicts are detected by Host::path() (folder/name). Secrets go to the vault only if `vault` is Some and unlocked;
 /// imported hosts with a secret get password/root_password = SecretSource::Vault, hosts without one keep their source.
 /// Overwrite keeps the existing host id. Nothing is saved: the caller saves the store and the vault.
-pub fn merge(
-    store: &mut HostStore,
-    vault: Option<&mut Vault>,
-    report: ImportReport,
-    conflict: Conflict,
-) -> Result<MergeSummary> {
+pub fn merge(store: &mut HostStore, vault: Option<&mut Vault>, report: ImportReport, conflict: Conflict) -> Result<MergeSummary> {
     let mut vault = vault.filter(|v| v.is_unlocked());
     let mut summary = MergeSummary::default();
     let mut by_path: HashMap<String, usize> = store.hosts.iter().enumerate().map(|(i, h)| (h.path(), i)).collect();
@@ -254,9 +232,7 @@ pub(crate) mod test_support {
     use crate::store::hosts::{HostStore, new_id};
 
     pub fn fixture(rel: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(rel)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(rel)
     }
 
     pub struct TempDir(pub PathBuf);
@@ -307,13 +283,8 @@ mod tests {
         let tmp = TempDir::new();
         let mut store = tmp.store();
         let mut vault = tmp.vault();
-        let existing = Host {
-            name: "web".into(),
-            folder: "prod".into(),
-            host: "10.0.0.1".into(),
-            user: Some("old".into()),
-            ..Host::default()
-        };
+        let existing =
+            Host { name: "web".into(), folder: "prod".into(), host: "10.0.0.1".into(), user: Some("old".into()), ..Host::default() };
         let id = existing.id.clone();
         vault.set(&id, SecretKind::Password, Some("old-pass".into()));
         store.upsert(existing);
@@ -323,10 +294,7 @@ mod tests {
     fn report() -> ImportReport {
         let mut web = imported("prod", "web", "10.0.0.2", Some("new-pass"));
         web.root_password = Some("root-pass".into());
-        ImportReport {
-            hosts: vec![web, imported("prod", "db", "10.0.0.3", None)],
-            warnings: vec![],
-        }
+        ImportReport { hosts: vec![web, imported("prod", "db", "10.0.0.3", None)], warnings: vec![] }
     }
 
     #[test]
@@ -367,10 +335,7 @@ mod tests {
         let renamed = store.find_by_path("prod/web (2)").unwrap();
         assert_eq!(renamed.host, "10.0.0.2");
         assert_ne!(renamed.id, id);
-        assert_eq!(
-            vault.get(&renamed.id, SecretKind::Password).as_deref(),
-            Some("new-pass")
-        );
+        assert_eq!(vault.get(&renamed.id, SecretKind::Password).as_deref(), Some("new-pass"));
         assert_eq!(store.find_by_path("prod/web (3)").unwrap().host, "10.0.0.9");
         assert_eq!(store.hosts.len(), 4);
     }
@@ -391,10 +356,7 @@ mod tests {
         let (_tmp, mut store, mut vault, id) = seeded();
         let mut item = imported("otra", "web", "10.0.0.5", Some("x"));
         item.host.id = id.clone();
-        let r = ImportReport {
-            hosts: vec![item],
-            warnings: vec![],
-        };
+        let r = ImportReport { hosts: vec![item], warnings: vec![] };
         merge(&mut store, Some(&mut vault), r, Conflict::Skip).unwrap();
         let new = store.find_by_path("otra/web").unwrap();
         assert_ne!(new.id, id);
@@ -405,14 +367,9 @@ mod tests {
     #[test]
     fn warns_about_local_commands() {
         let mut item = imported("", "x", "x", None);
-        item.host.password = SecretSource::Command {
-            command: "pass show x".into(),
-        };
+        item.host.password = SecretSource::Command { command: "pass show x".into() };
         item.host.ssh_args = vec!["-o".into(), "proxycommand=nc %h %p".into()];
-        let mut r = ImportReport {
-            hosts: vec![item],
-            warnings: vec![],
-        };
+        let mut r = ImportReport { hosts: vec![item], warnings: vec![] };
         warn_local_commands(&mut r);
         assert_eq!(r.warnings.len(), 1);
         assert!(r.warnings[0].contains("cmd:, ProxyCommand"), "{:?}", r.warnings);

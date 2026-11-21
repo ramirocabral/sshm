@@ -16,7 +16,6 @@ use crate::term::pane::GridSize;
 use crate::term::render::{self, RenderOpts};
 use theme::colors;
 
-
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let [main, status] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
@@ -65,7 +64,8 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         (None, false) => format!(" Hosts · /{} ", app.sidebar.query),
         _ => format!(" Hosts ({}) ", app.store.hosts.len()),
     };
-    let block = Block::default().borders(Borders::RIGHT).border_style(border).title(Span::styled(title, border.add_modifier(Modifier::BOLD)));
+    let block =
+        Block::default().borders(Borders::RIGHT).border_style(border).title(Span::styled(title, border.add_modifier(Modifier::BOLD)));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -104,11 +104,20 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         let (text, style) = match item {
             Item::Folder { name, depth, expanded, count, .. } => {
                 let arrow = if *expanded { "▾" } else { "▸" };
-                (format!("{}{arrow} {name} ({count})", "  ".repeat(*depth)), Style::default().fg(colors().folder).add_modifier(Modifier::BOLD))
+                (
+                    format!("{}{arrow} {name} ({count})", "  ".repeat(*depth)),
+                    Style::default().fg(colors().folder).add_modifier(Modifier::BOLD),
+                )
             }
             Item::Host { id, depth, .. } => {
                 let Some(h) = item.host(&app.store) else { continue };
-                let mark = if app.sidebar.marked.contains(id) { "✓" } else if connected.contains(id.as_str()) { "●" } else { " " };
+                let mark = if app.sidebar.marked.contains(id) {
+                    "✓"
+                } else if connected.contains(id.as_str()) {
+                    "●"
+                } else {
+                    " "
+                };
                 let indent = if app.sidebar.query.is_empty() { "  ".repeat(*depth) } else { String::new() };
                 let label = if app.sidebar.query.is_empty() { h.name.clone() } else { h.path() };
                 let style = if app.sidebar.marked.contains(id) {
@@ -137,14 +146,22 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     if let Some(h) = items.get(app.sidebar.selected).and_then(|i| i.host(&app.store))
-            && list_area.height > 6 && items.len() < (list_area.height as usize).saturating_sub(3) {
-                let y = list_area.bottom() - 2;
-                let target = h.display_target();
-                f.buffer_mut().set_stringn(list_area.x, y, &target, list_area.width as usize, Style::default().fg(colors().muted));
-                if let Some(j) = &h.jump {
-                    f.buffer_mut().set_stringn(list_area.x, y + 1, format!("via {j}"), list_area.width as usize, Style::default().fg(colors().muted));
-                }
-            }
+        && list_area.height > 6
+        && items.len() < (list_area.height as usize).saturating_sub(3)
+    {
+        let y = list_area.bottom() - 2;
+        let target = h.display_target();
+        f.buffer_mut().set_stringn(list_area.x, y, &target, list_area.width as usize, Style::default().fg(colors().muted));
+        if let Some(j) = &h.jump {
+            f.buffer_mut().set_stringn(
+                list_area.x,
+                y + 1,
+                format!("via {j}"),
+                list_area.width as usize,
+                Style::default().fg(colors().muted),
+            );
+        }
+    }
 }
 
 fn draw_tabbar(f: &mut Frame, app: &mut App, area: Rect) {
@@ -173,7 +190,10 @@ fn draw_tabbar(f: &mut Frame, app: &mut App, area: Rect) {
             break;
         }
         let style = if active {
-            Style::default().fg(colors().on_color).bg(if broadcast { colors().broadcast } else { colors().accent }).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(colors().on_color)
+                .bg(if broadcast { colors().broadcast } else { colors().accent })
+                .add_modifier(Modifier::BOLD)
         } else if broadcast {
             Style::default().fg(colors().broadcast).bg(colors().panel)
         } else {
@@ -267,7 +287,7 @@ fn draw_body(f: &mut Frame, app: &mut App, area: Rect) -> Option<Position> {
                 }
                 if let Some(code) = pane.exited {
                     let msg = match code {
-                        Some(0) =>  " Session ended · r/Enter reconnects · w closes ".to_string(),
+                        Some(0) => " Session ended · r/Enter reconnects · w closes ".to_string(),
                         Some(c) => format!(" Session ended (exit {c}) · r/Enter reconnects · w closes "),
                         None => " Session ended · r/Enter reconnects · w closes ".to_string(),
                     };
@@ -313,11 +333,15 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw(" "));
     }
     if let Some(t) = app.active_term_tab()
-        && t.broadcast {
-            let n = t.panes.iter().filter(|p| app.panes.get(p).is_some_and(|p| !p.excluded)).count();
-            spans.push(Span::styled(format!(" BROADCAST {n} "), Style::default().fg(colors().text).bg(colors().broadcast).add_modifier(Modifier::BOLD)));
-            spans.push(Span::raw(" "));
-        }
+        && t.broadcast
+    {
+        let n = t.panes.iter().filter(|p| app.panes.get(p).is_some_and(|p| !p.excluded)).count();
+        spans.push(Span::styled(
+            format!(" BROADCAST {n} "),
+            Style::default().fg(colors().text).bg(colors().broadcast).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+    }
     let sidebar_visual = app.focus == Focus::Sidebar && app.sidebar.visual.is_some();
     if sidebar_visual {
         spans.push(Span::styled(" VISUAL ", Style::default().fg(colors().on_color).bg(colors().visual).add_modifier(Modifier::BOLD)));
@@ -346,7 +370,10 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     } else if app.focus == Focus::Sidebar {
         spans.push(Span::styled(keymap::hints(Ctx::Hosts, &app.leader), Style::default().fg(colors().subtle)));
     } else {
-        spans.push(Span::styled(format!("{leader} is the leader key · {leader} ? help · {leader} Tab hosts"), Style::default().fg(colors().muted)));
+        spans.push(Span::styled(
+            format!("{leader} is the leader key · {leader} ? help · {leader} Tab hosts"),
+            Style::default().fg(colors().muted),
+        ));
     }
     let vault = if app.vault.is_unlocked() {
         Span::styled(" vault unlocked ", Style::default().fg(colors().on_color).bg(colors().success))

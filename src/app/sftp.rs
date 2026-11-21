@@ -567,7 +567,9 @@ impl App {
                     while let Some(job) = jrx.recv().await {
                         let (id, result) = match job {
                             Job::Upload { id, local, remote } => (id, upload(&worker_session, &local, &remote, id, tab, &worker_tx).await),
-                            Job::Download { id, remote, local } => (id, download(&worker_session, &remote, &local, id, tab, &worker_tx).await),
+                            Job::Download { id, remote, local } => {
+                                (id, download(&worker_session, &remote, &local, id, tab, &worker_tx).await)
+                            }
                         };
                         let (error, skipped) = match result {
                             Ok(skipped) => (None, skipped),
@@ -767,9 +769,10 @@ impl App {
             KeyCode::Char(' ') => {
                 let p = view.panel_mut(remote);
                 if let Some(name) = p.current().map(|e| e.name.clone()).filter(|n| n != "..")
-                    && !p.marked.remove(&name) {
-                        p.marked.insert(name);
-                    }
+                    && !p.marked.remove(&name)
+                {
+                    p.marked.insert(name);
+                }
                 mv(view, 1);
             }
             KeyCode::Char('.') => {
@@ -827,7 +830,9 @@ impl App {
                     action: Some(InputAction::SftpGoto { tab, remote }),
                 }));
             }
-            KeyCode::Char('x') => view.transfers.retain(|t| matches!(t.state, TransferState::Queued | TransferState::Scanning | TransferState::Running)),
+            KeyCode::Char('x') => {
+                view.transfers.retain(|t| matches!(t.state, TransferState::Queued | TransferState::Scanning | TransferState::Running))
+            }
             KeyCode::Char('q') | KeyCode::Esc => {
                 if !view.panel(remote).marked.is_empty() {
                     view.panel_mut(remote).marked.clear();
@@ -912,7 +917,8 @@ impl App {
         } else {
             let path = Path::new(&view.local.cwd).join(&name);
             tokio::task::spawn_blocking(move || {
-                let result = std::fs::create_dir_all(&path).map(|_| format!("Folder created: {}", path.display())).map_err(|e| e.to_string());
+                let result =
+                    std::fs::create_dir_all(&path).map(|_| format!("Folder created: {}", path.display())).map_err(|e| e.to_string());
                 send(&tx, tab, SftpEvent::OpDone { remote, result });
             });
         }
@@ -1009,7 +1015,10 @@ impl App {
     }
 }
 
-fn remove_remote<'a>(s: &'a SftpSession, path: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+fn remove_remote<'a>(
+    s: &'a SftpSession,
+    path: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
     Box::pin(async move {
         let meta = s.symlink_metadata(path).await.map_err(|e| describe(&e))?;
         let removed = if remote_type(&meta) == FileType::Dir {
@@ -1052,7 +1061,14 @@ impl Progress<'_> {
 }
 
 /// Returns what was skipped (links to folders, special files).
-async fn upload(s: &SftpSession, local: &Path, remote: &str, id: u64, tab: u64, tx: &UnboundedSender<AppEvent>) -> Result<Vec<String>, String> {
+async fn upload(
+    s: &SftpSession,
+    local: &Path,
+    remote: &str,
+    id: u64,
+    tab: u64,
+    tx: &UnboundedSender<AppEvent>,
+) -> Result<Vec<String>, String> {
     send(tx, tab, SftpEvent::Scanning { id });
     let (l, r) = (local.to_path_buf(), remote.to_string());
     let plan = tokio::task::spawn_blocking(move || plan_upload(&l, &r)).await.map_err(|e| e.to_string())??;
@@ -1100,7 +1116,14 @@ async fn upload_file(s: &SftpSession, local: &Path, remote: &str, prog: &mut Pro
 }
 
 /// Returns what was skipped (links to folders, special files).
-async fn download(s: &SftpSession, remote: &str, local: &Path, id: u64, tab: u64, tx: &UnboundedSender<AppEvent>) -> Result<Vec<String>, String> {
+async fn download(
+    s: &SftpSession,
+    remote: &str,
+    local: &Path,
+    id: u64,
+    tab: u64,
+    tx: &UnboundedSender<AppEvent>,
+) -> Result<Vec<String>, String> {
     send(tx, tab, SftpEvent::Scanning { id });
     let plan = plan_download(s, remote, local).await?;
     let mut prog = Progress::start(tx, tab, id, plan.total);
@@ -1235,7 +1258,8 @@ mod tests {
     #[test]
     fn remote_kinds() {
         let attrs = |mode: Option<u32>, size: u64| FileAttributes { permissions: mode, size: Some(size), ..FileAttributes::default() };
-        let (file, dir, link, sock) = (attrs(Some(0o100644), 7), attrs(Some(0o040755), 0), attrs(Some(0o120777), 3), attrs(Some(0o140755), 0));
+        let (file, dir, link, sock) =
+            (attrs(Some(0o100644), 7), attrs(Some(0o040755), 0), attrs(Some(0o120777), 3), attrs(Some(0o140755), 0));
         assert_eq!(remote_kind(&file, None), Kind::File(7));
         assert_eq!(remote_kind(&dir, None), Kind::Dir);
         assert_eq!(remote_kind(&sock, None), Kind::Other);

@@ -1,10 +1,9 @@
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::super::App;
 use super::super::dialogs::*;
 use super::super::form::FormEvent;
 use super::super::widgets::TextInput;
-use super::super::App;
 use crate::ssh::command::PromptKind;
 
 impl App {

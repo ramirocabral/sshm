@@ -52,11 +52,7 @@ pub fn ensure_private_dir(dir: &PathBuf) -> Result<()> {
 /// Creates `dir` and its missing parents with 0700; existing directories are left alone.
 fn create_missing_dir(dir: &Path) -> Result<()> {
     if !dir.exists() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .with_context(|| format!("could not create {}", dir.display()))?;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
     Ok(())
 }
@@ -206,8 +202,7 @@ mod tests {
         fs::create_dir(&target).unwrap();
         fs::write(target.join("child"), "x").unwrap();
         assert!(write_private(&target, b"data").is_err());
-        let names: Vec<String> =
-            fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let names: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["taken"]);
         fs::remove_dir_all(dir).ok();
     }

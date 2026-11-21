@@ -385,11 +385,7 @@ impl App {
             return;
         }
         let id = self.next_id();
-        self.tabs.push(Tab {
-            id,
-            title: None,
-            kind: TabKind::Terms(TermTab { panes, focused: 0, broadcast: false, zoomed: false }),
-        });
+        self.tabs.push(Tab { id, title: None, kind: TabKind::Terms(TermTab { panes, focused: 0, broadcast: false, zoomed: false }) });
         self.active = self.tabs.len() - 1;
         self.focus = Focus::Main;
     }
@@ -420,9 +416,10 @@ impl App {
         match self.spawn_pane(host.as_deref()) {
             Ok(new_id) => {
                 if let Some(mut p) = self.panes.remove(&pane_id)
-                    && let Some(t) = p.token.take() {
-                        self.owners.remove(&t);
-                    }
+                    && let Some(t) = p.token.take()
+                {
+                    self.owners.remove(&t);
+                }
                 if let Some(p) = self.panes.get_mut(&new_id) {
                     p.excluded = excluded;
                 }
@@ -442,21 +439,23 @@ impl App {
 
     pub fn close_pane(&mut self, pane_id: PaneId) {
         if let Some(mut p) = self.panes.remove(&pane_id)
-            && let Some(t) = p.token.take() {
-                self.owners.remove(&t);
-            }
+            && let Some(t) = p.token.take()
+        {
+            self.owners.remove(&t);
+        }
         let mut empty_tab = None;
         for (i, tab) in self.tabs.iter_mut().enumerate() {
             if let TabKind::Terms(t) = &mut tab.kind
-                && let Some(pos) = t.panes.iter().position(|p| *p == pane_id) {
-                    t.panes.remove(pos);
-                    if t.focused >= t.panes.len() {
-                        t.focused = t.panes.len().saturating_sub(1);
-                    }
-                    if t.panes.is_empty() {
-                        empty_tab = Some(i);
-                    }
+                && let Some(pos) = t.panes.iter().position(|p| *p == pane_id)
+            {
+                t.panes.remove(pos);
+                if t.focused >= t.panes.len() {
+                    t.focused = t.panes.len().saturating_sub(1);
                 }
+                if t.panes.is_empty() {
+                    empty_tab = Some(i);
+                }
+            }
         }
         if let Some(i) = empty_tab {
             self.remove_tab(i);
@@ -472,9 +471,10 @@ impl App {
             TabKind::Terms(t) => {
                 for p in t.panes {
                     if let Some(mut pane) = self.panes.remove(&p)
-                        && let Some(tok) = pane.token.take() {
-                            self.owners.remove(&tok);
-                        }
+                        && let Some(tok) = pane.token.take()
+                    {
+                        self.owners.remove(&tok);
+                    }
                 }
             }
             TabKind::Sftp(v) => {
@@ -513,9 +513,10 @@ impl App {
             }
             PaneNotify::Bell => {
                 if self.focused_pane_id() != Some(id)
-                    && let Some(p) = self.panes.get_mut(&id) {
-                        p.bell = true;
-                    }
+                    && let Some(p) = self.panes.get_mut(&id)
+                {
+                    p.bell = true;
+                }
             }
         }
     }
@@ -628,7 +629,9 @@ impl App {
                 Some(v) => {
                     let _ = reply.send(Some(v));
                 }
-                None => self.push_dialog(Dialog::AskPass(AskPassDialog::new(label, prompt, PromptKind::Password, reply).storable(host_id, kind, true))),
+                None => self.push_dialog(Dialog::AskPass(
+                    AskPassDialog::new(label, prompt, PromptKind::Password, reply).storable(host_id, kind, true),
+                )),
             },
         }
     }
@@ -656,7 +659,9 @@ impl App {
                     let purpose = SecretPurpose::AskPass { reply: req.reply, prompt, host_id: host_id.clone(), label, kind: secret_kind };
                     self.with_secret(&host_id, secret_kind, purpose);
                 } else {
-                    let d = AskPassDialog::new(label, prompt, kind, req.reply).storable(host_id, secret_kind, true).note("The previous password was rejected");
+                    let d = AskPassDialog::new(label, prompt, kind, req.reply)
+                        .storable(host_id, secret_kind, true)
+                        .note("The previous password was rejected");
                     self.push_dialog(Dialog::AskPass(d));
                 }
             }
@@ -765,7 +770,9 @@ impl App {
         if let AfterUnlock::Secret { purpose, .. } = then {
             match purpose {
                 SecretPurpose::AskPass { reply, prompt, host_id, label, kind } => {
-                    let d = AskPassDialog::new(label, prompt, PromptKind::Password, reply).storable(host_id, kind, false).note("Vault locked: type it manually");
+                    let d = AskPassDialog::new(label, prompt, PromptKind::Password, reply)
+                        .storable(host_id, kind, false)
+                        .note("Vault locked: type it manually");
                     self.push_dialog(Dialog::AskPass(d));
                 }
                 SecretPurpose::Type { .. } => {}
@@ -811,7 +818,9 @@ impl App {
                 let mut rest = VecDeque::new();
                 for d in self.dialogs.drain(..) {
                     match d {
-                        Dialog::Unlock(mut o) if !o.changing && o.busy.is_none() => waiting.push(std::mem::replace(&mut o.then, AfterUnlock::Nothing)),
+                        Dialog::Unlock(mut o) if !o.changing && o.busy.is_none() => {
+                            waiting.push(std::mem::replace(&mut o.then, AfterUnlock::Nothing))
+                        }
                         d => rest.push_back(d),
                     }
                 }
@@ -1132,7 +1141,14 @@ pub(crate) mod tests {
         app.vault.set(&host.id, SecretKind::Password, Some("old".into()));
         app.vault.save().unwrap();
 
-        let ctx = HostFormContext { folders: vec![], jump_hosts: vec![], keys: vec![], saved_password: true, saved_root: false, vault_locked: false };
+        let ctx = HostFormContext {
+            folders: vec![],
+            jump_hosts: vec![],
+            keys: vec![],
+            saved_password: true,
+            saved_root: false,
+            vault_locked: false,
+        };
         let mut form = HostForm::new(&host, true, ctx);
         form.form.set_value("pw_source", "none");
         form.on_change("pw_source");

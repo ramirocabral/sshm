@@ -87,7 +87,16 @@ pub struct UnlockDialog {
 
 impl UnlockDialog {
     pub fn new(creating: bool, then: AfterUnlock) -> Self {
-        UnlockDialog { input: TextInput::masked(), confirm: TextInput::masked(), creating, changing: false, field: 0, error: None, then, busy: None }
+        UnlockDialog {
+            input: TextInput::masked(),
+            confirm: TextInput::masked(),
+            creating,
+            changing: false,
+            field: 0,
+            error: None,
+            then,
+            busy: None,
+        }
     }
 }
 
@@ -270,12 +279,10 @@ impl MoveForm {
     /// the folder being moved and the ones below it.
     pub fn new(what: MoveWhat, title: String, current: &str, folders: Vec<String>) -> Self {
         let inside = |f: &str| matches!(&what, MoveWhat::Folder(moving) if subpath(f, moving).is_some());
-        let mut dests: Vec<Choice> =
-            folders.into_iter().filter(|f| !inside(f)).map(|f| Choice::new(f.clone(), f, "")).collect();
+        let mut dests: Vec<Choice> = folders.into_iter().filter(|f| !inside(f)).map(|f| Choice::new(f.clone(), f, "")).collect();
         dests.insert(0, Choice::new("", "(top level)", "no folder"));
         let fields = vec![
-            Field::combo("dest", "Move to", current, dests)
-                .hint("Press Enter to pick a folder, or type a new one (a/b for subfolders)"),
+            Field::combo("dest", "Move to", current, dests).hint("Press Enter to pick a folder, or type a new one (a/b for subfolders)"),
         ];
         MoveForm { form: Form::new(title, "Move", fields), what }
     }
@@ -425,7 +432,9 @@ impl HostForm {
             Field::text("port", "Port", host.port.map(|p| p.to_string()).unwrap_or_default())
                 .placeholder("22")
                 .hint("Empty = the port from ~/.ssh/config, or 22"),
-            Field::text("user", "User", opt(&host.user)).placeholder("from ~/.ssh/config").hint("Empty = the user from ~/.ssh/config, or yours"),
+            Field::text("user", "User", opt(&host.user))
+                .placeholder("from ~/.ssh/config")
+                .hint("Empty = the user from ~/.ssh/config, or yours"),
             Field::combo("jump", "Jump host", opt(&host.jump), ctx.jump_hosts)
                 .placeholder("none")
                 .hint("Connect through another host (ProxyJump). Enter lists your hosts, or type user@host:port"),
@@ -436,7 +445,14 @@ impl HostForm {
         ];
         for (ids, label, kind, value, stored, hint) in [
             (PW, "Password", pw_kind, &pw_value, ctx.saved_password, "Where the login password comes from; sudo prompts use it too"),
-            (ROOT, "Root password", root_kind, &root_value, ctx.saved_root, "Where the root password comes from, for su - (leader+P types it)"),
+            (
+                ROOT,
+                "Root password",
+                root_kind,
+                &root_value,
+                ctx.saved_root,
+                "Where the root password comes from, for su - (leader+P types it)",
+            ),
         ] {
             let (src, vault, keyring, item, reference, cmd) = ids;
             fields.push(Field::select(src, label, source_choices(), kind).hint(hint));
@@ -476,7 +492,10 @@ impl HostForm {
             Field::text("ssh_args", "Extra ssh args", crate::shell::join(&host.ssh_args))
                 .placeholder("e.g. -o ServerAliveInterval=30")
                 .hint("Passed to ssh; quote an argument that has spaces, as in a shell"),
-            Field::text("tags", "Tags", host.tags.join(", ")).section("Notes").placeholder("e.g. prod, web").hint("Comma separated; / in the host list searches them"),
+            Field::text("tags", "Tags", host.tags.join(", "))
+                .section("Notes")
+                .placeholder("e.g. prod, web")
+                .hint("Comma separated; / in the host list searches them"),
             Field::text("notes", "Notes", host.notes.clone()),
         ]);
         let title = if editing { format!("Edit host · {}", host.name) } else { "New host".to_string() };

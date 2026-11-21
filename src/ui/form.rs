@@ -7,7 +7,6 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use super::theme::colors;
 use crate::app::form::{Button, FieldKind, Form, Mode};
 
-
 pub struct FormLayout {
     pub cursor: Option<Position>,
     pub rows: Vec<(usize, Rect)>,
@@ -84,8 +83,11 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
                 if focused {
                     put(f, inner.x, y, "›", 1, Style::default().fg(colors().accent).add_modifier(Modifier::BOLD));
                 }
-                let label_style =
-                    if focused { Style::default().fg(colors().accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(colors().subtle) };
+                let label_style = if focused {
+                    Style::default().fg(colors().accent).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(colors().subtle)
+                };
                 put(f, inner.x + 2, y, field.label, label_w, label_style);
 
                 let bx = Rect { x: input_x, y, width: input_w, height: 1 };
@@ -108,16 +110,23 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
                         if input.value.is_empty() {
                             put(f, text_area.x, y, &placeholder, text_area.width, boxed.fg(colors().muted).add_modifier(Modifier::ITALIC));
                         }
-                        let show_cursor = focused
-                            && form.mode == Mode::Insert
-                            && (form.popup.is_none() || matches!(field.kind, FieldKind::Combo { .. }));
+                        let show_cursor =
+                            focused && form.mode == Mode::Insert && (form.popup.is_none() || matches!(field.kind, FieldKind::Combo { .. }));
                         if let Some(p) = input.render_plain(text_area, f.buffer_mut(), show_cursor, boxed) {
                             out.cursor = Some(p);
                         }
                         if let FieldKind::Combo { options, .. } = &field.kind
-                            && !options.is_empty() {
-                                put(f, bx.right().saturating_sub(2), y, "▾", 1, boxed.fg(if focused { colors().accent } else { colors().muted }));
-                            }
+                            && !options.is_empty()
+                        {
+                            put(
+                                f,
+                                bx.right().saturating_sub(2),
+                                y,
+                                "▾",
+                                1,
+                                boxed.fg(if focused { colors().accent } else { colors().muted }),
+                            );
+                        }
                     }
                     FieldKind::Select { options, selected } => {
                         f.buffer_mut().set_style(bx, boxed);
@@ -130,7 +139,14 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
                             }
                         }
                         let arrows = if focused { "◂▸" } else { " ▾" };
-                        put(f, bx.right().saturating_sub(3), y, arrows, 2, boxed.fg(if focused { colors().accent } else { colors().muted }));
+                        put(
+                            f,
+                            bx.right().saturating_sub(3),
+                            y,
+                            arrows,
+                            2,
+                            boxed.fg(if focused { colors().accent } else { colors().muted }),
+                        );
                     }
                     FieldKind::Toggle(on) => {
                         let (txt, style) = if *on {
@@ -163,7 +179,14 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
     };
     put(f, inner.x, hint_y, &hint, inner.width, Style::default().fg(colors().subtle));
     if form.confirm_discard {
-        put(f, inner.x, hint_y + 1, "Discard unsaved changes?  y yes · n no", inner.width, Style::default().fg(colors().warning).add_modifier(Modifier::BOLD));
+        put(
+            f,
+            inner.x,
+            hint_y + 1,
+            "Discard unsaved changes?  y yes · n no",
+            inner.width,
+            Style::default().fg(colors().warning).add_modifier(Modifier::BOLD),
+        );
     } else if let Some(e) = &form.error {
         put(f, inner.x, hint_y + 1, &format!("✗ {e}"), inner.width, Style::default().fg(colors().error).add_modifier(Modifier::BOLD));
     }
@@ -224,7 +247,8 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
         let py = if below + ph <= area.bottom() { below } else { anchor.y.saturating_sub(ph) };
         let prect = Rect { x: anchor.x, y: py, width: pw, height: ph };
         f.render_widget(Clear, prect);
-        let pblock = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(colors().accent));
+        let pblock =
+            Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(colors().accent));
         let pin = pblock.inner(prect);
         f.render_widget(pblock, prect);
         let start = if p.selected >= max_items { p.selected + 1 - max_items } else { 0 };

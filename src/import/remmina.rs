@@ -12,8 +12,8 @@ use des::TdesEde3;
 use des::cipher::KeyInit;
 
 use super::util::{
-    IniSection, SkipCounter, cbc_decrypt, clean_folder, clean_segment, decode_text, find_section, non_empty, parse_ini,
-    port_opt, printable_secret,
+    IniSection, SkipCounter, cbc_decrypt, clean_folder, clean_segment, decode_text, find_section, non_empty, parse_ini, port_opt,
+    printable_secret,
 };
 use super::{ImportReport, ImportedHost};
 use crate::paths;
@@ -29,10 +29,7 @@ pub(super) struct Secret {
 impl Secret {
     pub fn from_base64(b64: &str) -> Option<Self> {
         let raw = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
-        Some(Secret {
-            key: raw.get(..24)?.try_into().ok()?,
-            iv: raw.get(24..32)?.try_into().ok()?,
-        })
+        Some(Secret { key: raw.get(..24)?.try_into().ok()?, iv: raw.get(24..32)?.try_into().ok()? })
     }
 
     pub fn decrypt(&self, b64: &str) -> Option<String> {
@@ -47,11 +44,7 @@ impl Secret {
 }
 
 fn default_pref() -> PathBuf {
-    paths::config_dir()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| paths::home().join(".config"))
-        .join("remmina/remmina.pref")
+    paths::config_dir().parent().map(Path::to_path_buf).unwrap_or_else(|| paths::home().join(".config")).join("remmina/remmina.pref")
 }
 
 fn load_secret(path: &Path) -> Result<Secret, String> {
@@ -129,16 +122,11 @@ pub(super) fn import(path: &Path, pref: Option<&Path>) -> Result<ImportReport> {
     let mut skipped = SkipCounter::default();
     let mut counters = Counters::default();
     for file in &files {
-        let fname = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let fname = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
         let sections = parse_ini(&decode_text(&bytes));
         let Some(section) = find_section(&sections, "remmina") else {
-            report
-                .warnings
-                .push(format!("{APP}: {fname} is not a Remmina profile, skipped"));
+            report.warnings.push(format!("{APP}: {fname} is not a Remmina profile, skipped"));
             continue;
         };
         let get = |k: &str| section.get(k).map(unescape).unwrap_or_default();
@@ -164,17 +152,9 @@ pub(super) fn import(path: &Path, pref: Option<&Path>) -> Result<ImportReport> {
             port: port.and_then(port_opt),
             user: non_empty(&get("username")).or_else(|| non_empty(&get("ssh_username"))),
             identity_file: non_empty(&get("ssh_privatekey")),
-            ssh_args: if proxy.trim().is_empty() {
-                Vec::new()
-            } else {
-                vec!["-o".into(), format!("ProxyCommand={}", proxy.trim())]
-            },
+            ssh_args: if proxy.trim().is_empty() { Vec::new() } else { vec!["-o".into(), format!("ProxyCommand={}", proxy.trim())] },
             // ssh_auth: 0 = password, 5 = keyboard-interactive; the rest use keys, the agent or Kerberos.
-            password: if matches!(ssh_auth, 0 | 5) {
-                SecretSource::Vault
-            } else {
-                SecretSource::None
-            },
+            password: if matches!(ssh_auth, 0 | 5) { SecretSource::Vault } else { SecretSource::None },
             root_password: SecretSource::None,
             ..Host::default()
         };
@@ -193,25 +173,15 @@ pub(super) fn import(path: &Path, pref: Option<&Path>) -> Result<ImportReport> {
     }
     if counters.no_key > 0 {
         let reason = secret.err().unwrap_or_default();
-        report
-            .warnings
-            .push(format!("{APP}: {} password(s) not imported: {reason}", counters.no_key));
+        report.warnings.push(format!("{APP}: {} password(s) not imported: {reason}", counters.no_key));
     }
     if counters.failed > 0 {
-        report.warnings.push(format!(
-            "{APP}: could not decrypt {} password(s) (remmina.pref from another installation?)",
-            counters.failed
-        ));
+        report.warnings.push(format!("{APP}: could not decrypt {} password(s) (remmina.pref from another installation?)", counters.failed));
     }
     Ok(report)
 }
 
-fn read_secret(
-    section: &IniSection,
-    key: &str,
-    secret: &Result<Secret, String>,
-    counters: &mut Counters,
-) -> Option<String> {
+fn read_secret(section: &IniSection, key: &str, secret: &Result<Secret, String>, counters: &mut Counters) -> Option<String> {
     let value = section.get(key)?.trim();
     match value {
         "" => None,
@@ -256,27 +226,13 @@ mod tests {
 
     #[test]
     fn directory_of_profiles() {
-        let opts = ImportOptions {
-            passphrase: None,
-            remmina_pref: Some(fixture("remmina/remmina.pref")),
-        };
+        let opts = ImportOptions { passphrase: None, remmina_pref: Some(fixture("remmina/remmina.pref")) };
         let r = super::super::import(Source::Remmina, &fixture("remmina/profiles"), &opts).unwrap();
         let paths: Vec<_> = r.hosts.iter().map(|h| h.host.path()).collect();
-        assert_eq!(
-            paths,
-            [
-                "Clientes/ACME/web-01",
-                "Lab/nas",
-                "Clientes/ACME/db con espacios",
-                "legacy"
-            ]
-        );
+        assert_eq!(paths, ["Clientes/ACME/web-01", "Lab/nas", "Clientes/ACME/db con espacios", "legacy"]);
 
         let web = &r.hosts[0];
-        assert_eq!(
-            (web.host.host.as_str(), web.host.port, web.host.user.as_deref()),
-            ("10.20.0.11", Some(2222), Some("deploy"))
-        );
+        assert_eq!((web.host.host.as_str(), web.host.port, web.host.user.as_deref()), ("10.20.0.11", Some(2222), Some("deploy")));
         assert_eq!(web.password.as_deref(), Some("Remmina-Pass#1"));
         assert_eq!(web.host.password, SecretSource::Vault);
 
@@ -303,21 +259,11 @@ mod tests {
         let r = import(&file, Some(&fixture("remmina/missing.pref"))).unwrap();
         assert_eq!(r.hosts.len(), 1);
         assert_eq!(r.hosts[0].password, None);
-        assert!(
-            r.warnings
-                .iter()
-                .any(|w| w.contains("1 password(s) not imported: could not read")),
-            "{:?}",
-            r.warnings
-        );
+        assert!(r.warnings.iter().any(|w| w.contains("1 password(s) not imported: could not read")), "{:?}", r.warnings);
 
         let r = import(&file, Some(&fixture("remmina/other.pref"))).unwrap();
         assert_eq!(r.hosts[0].password, None);
-        assert!(
-            r.warnings.iter().any(|w| w.contains("could not decrypt 1")),
-            "{:?}",
-            r.warnings
-        );
+        assert!(r.warnings.iter().any(|w| w.contains("could not decrypt 1")), "{:?}", r.warnings);
     }
 
     #[test]

@@ -9,9 +9,19 @@ use crate::store::hosts::{Host, HostStore, parent_folder as parent_of, subpath};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
-    Folder { path: String, name: String, depth: usize, expanded: bool, count: usize },
+    Folder {
+        path: String,
+        name: String,
+        depth: usize,
+        expanded: bool,
+        count: usize,
+    },
     /// `idx` is the host's position in `store.hosts` when the list was built.
-    Host { id: String, idx: usize, depth: usize },
+    Host {
+        id: String,
+        idx: usize,
+        depth: usize,
+    },
 }
 
 impl Item {
@@ -209,8 +219,7 @@ impl Sidebar {
     /// Follows a folder renamed from `from` to `to`: its subfolders stay expanded or collapsed
     /// as they were, and the cursor lands on it.
     pub fn folder_renamed(&mut self, store: &HostStore, from: &str, to: &str) {
-        let moved: Vec<String> =
-            self.expanded.iter().filter_map(|f| subpath(f, from).map(|rest| format!("{to}{rest}"))).collect();
+        let moved: Vec<String> = self.expanded.iter().filter_map(|f| subpath(f, from).map(|rest| format!("{to}{rest}"))).collect();
         self.expanded.retain(|f| subpath(f, from).is_none());
         self.expanded.extend(moved);
         self.expand_path(parent_of(to));
@@ -317,7 +326,10 @@ mod tests {
                 Item::Host { depth, .. } => format!("{depth}:{}", i.host(&store).unwrap().name),
             })
             .collect();
-        assert_eq!(rows, ["0:B(1)", "1:b1", "0:a(5)", "1:a/X(1)", "2:X1", "1:a/x(3)", "2:a/x/y(1)", "3:y1", "2:odd", "2:x1", "1:a1", "0:r"]);
+        assert_eq!(
+            rows,
+            ["0:B(1)", "1:b1", "0:a(5)", "1:a/X(1)", "2:X1", "1:a/x(3)", "2:a/x/y(1)", "3:y1", "2:odd", "2:x1", "1:a1", "0:r"]
+        );
         store.hosts.remove(0);
         assert_eq!(items[1].host(&store).map(|h| h.name.as_str()), Some("b1"));
     }

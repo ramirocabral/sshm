@@ -12,8 +12,8 @@ use base64::Engine;
 use sha2::{Digest, Sha512};
 
 use super::util::{
-    IniSection, SkipCounter, aes256_cfb8_decrypt, aes256_encrypt_block, clean_folder, clean_segment, decode_text,
-    find_section, non_empty, parse_ini, port_opt, printable_secret,
+    IniSection, SkipCounter, aes256_cfb8_decrypt, aes256_encrypt_block, clean_folder, clean_segment, decode_text, find_section, non_empty,
+    parse_ini, port_opt, printable_secret,
 };
 use super::{ImportReport, ImportedHost};
 use crate::store::hosts::{Host, SecretSource};
@@ -22,10 +22,8 @@ const SSH: u32 = 0;
 const APP: &str = "MobaXterm";
 
 /// Session types in the order of MobaXterm's "New session" buttons.
-const KINDS: [&str; 15] = [
-    "SSH", "Telnet", "Rsh", "XDMCP", "RDP", "VNC", "FTP", "SFTP", "Serial", "File", "Shell", "Browser", "Mosh",
-    "AWS S3", "WSL",
-];
+const KINDS: [&str; 15] =
+    ["SSH", "Telnet", "Rsh", "XDMCP", "RDP", "VNC", "FTP", "SFTP", "Serial", "File", "Shell", "Browser", "Mosh", "AWS S3", "WSL"];
 
 pub(super) fn import(path: &Path, master: Option<&str>) -> Result<ImportReport> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
@@ -81,19 +79,9 @@ fn jump(hosts: &str, ports: &str, users: &str) -> Option<String> {
             if h.is_empty() {
                 return None;
             }
-            let user = users
-                .get(i)
-                .map(|u| unescape(u).trim().to_string())
-                .filter(|u| !u.is_empty());
-            let port = ports
-                .get(i)
-                .and_then(|p| p.trim().parse::<u16>().ok())
-                .and_then(port_opt);
-            Some(format!(
-                "{}{h}{}",
-                user.map(|u| format!("{u}@")).unwrap_or_default(),
-                port.map(|p| format!(":{p}")).unwrap_or_default()
-            ))
+            let user = users.get(i).map(|u| unescape(u).trim().to_string()).filter(|u| !u.is_empty());
+            let port = ports.get(i).and_then(|p| p.trim().parse::<u16>().ok()).and_then(port_opt);
+            Some(format!("{}{h}{}", user.map(|u| format!("{u}@")).unwrap_or_default(), port.map(|p| format!(":{p}")).unwrap_or_default()))
         })
         .collect();
     (!hops.is_empty()).then(|| hops.join(","))
@@ -113,11 +101,7 @@ pub(super) fn decrypt(key: &[u8; 32], b64: &str) -> Option<String> {
 }
 
 fn lookup<'a>(section: Option<&'a IniSection>, key: &str) -> Option<&'a str> {
-    section?
-        .entries
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(key))
-        .map(|(_, v)| v.as_str())
+    section?.entries.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str())
 }
 
 pub(super) fn parse(text: &str, master: Option<&str>) -> Result<ImportReport> {
@@ -156,28 +140,20 @@ pub(super) fn parse(text: &str, master: Option<&str>) -> Result<ImportReport> {
                 continue;
             }
             if s.host.is_empty() {
-                report
-                    .warnings
-                    .push(format!("{APP}: session '{name}' has no host, skipped"));
+                report.warnings.push(format!("{APP}: session '{name}' has no host, skipped"));
                 continue;
             }
 
             let mut user = s.user.clone();
             let mut password = None;
-            if let Some(cred) = user
-                .strip_prefix('[')
-                .and_then(|u| u.strip_suffix(']'))
-                .map(str::to_string)
-            {
+            if let Some(cred) = user.strip_prefix('[').and_then(|u| u.strip_suffix(']')).map(str::to_string) {
                 match lookup(credentials, &cred).and_then(|v| v.split_once(':')) {
                     Some((u, enc)) => {
                         user = u.to_string();
                         password = decrypt_opt(enc);
                     }
                     None => {
-                        report.warnings.push(format!(
-                            "{APP}: '{name}' uses credential '{cred}', which is not in the file"
-                        ));
+                        report.warnings.push(format!("{APP}: '{name}' uses credential '{cred}', which is not in the file"));
                         user.clear();
                     }
                 }
@@ -189,10 +165,7 @@ pub(super) fn parse(text: &str, master: Option<&str>) -> Result<ImportReport> {
             }
 
             let identity_file = non_empty(&s.key.replace("_CurrentDrive_", "C"));
-            if identity_file
-                .as_deref()
-                .is_some_and(|k| k.contains('\\') || k.contains(':') || k.contains("_ProfileDir_"))
-            {
+            if identity_file.as_deref().is_some_and(|k| k.contains('\\') || k.contains(':') || k.contains("_ProfileDir_")) {
                 windows_keys += 1;
             }
             let host = Host {
@@ -204,11 +177,7 @@ pub(super) fn parse(text: &str, master: Option<&str>) -> Result<ImportReport> {
                 jump: s.jump,
                 notes: s.comment,
                 on_connect: non_empty(&s.command),
-                password: if identity_file.is_some() {
-                    SecretSource::None
-                } else {
-                    SecretSource::Vault
-                },
+                password: if identity_file.is_some() { SecretSource::None } else { SecretSource::Vault },
                 identity_file,
                 ..Host::default()
             };
@@ -224,9 +193,7 @@ pub(super) fn parse(text: &str, master: Option<&str>) -> Result<ImportReport> {
     skipped.warnings(APP, "SSH", &mut report.warnings);
     let stored = passwords.is_some_and(|s| !s.entries.is_empty()) || credentials.is_some_and(|s| !s.entries.is_empty());
     if stored && key.is_none() {
-        report.warnings.push(format!(
-            "{APP}: the file has saved passwords; give the master password to import them"
-        ));
+        report.warnings.push(format!("{APP}: the file has saved passwords; give the master password to import them"));
     }
     if failed > 0 {
         report.warnings.push(format!(
@@ -235,9 +202,7 @@ pub(super) fn parse(text: &str, master: Option<&str>) -> Result<ImportReport> {
         ));
     }
     if windows_keys > 0 {
-        report.warnings.push(format!(
-            "{APP}: {windows_keys} session(s) use a private key with a Windows path; fix identity_file"
-        ));
+        report.warnings.push(format!("{APP}: {windows_keys} session(s) use a private key with a Windows path; fix identity_file"));
     }
     Ok(report)
 }
@@ -251,10 +216,7 @@ mod tests {
     #[test]
     fn published_vectors() {
         let key = master_key("12345678");
-        assert_eq!(
-            decrypt(&key, "1du11XKQBOxud/FWh4ouWA==").as_deref(),
-            Some("Lw3+cZ2s.w@U@f]U")
-        );
+        assert_eq!(decrypt(&key, "1du11XKQBOxud/FWh4ouWA==").as_deref(), Some("Lw3+cZ2s.w@U@f]U"));
         assert_eq!(decrypt(&key, "0XROpGmLAYVx").as_deref(), Some("HyperSine"));
         assert_eq!(decrypt(&master_key("other"), "1du11XKQBOxud/FWh4ouWA=="), None);
         assert_eq!(decrypt(&key, "not base64!"), None);
@@ -263,10 +225,7 @@ mod tests {
     #[test]
     fn session_line() {
         let s = parse_session("#109#0%10.0.0.1%2222%root%%-1%-1%uptime%gw1__PIPE__gw2%22__PIPE__2200%ops__PIPE__%0%0%0%_CurrentDrive_:\\k.ppk%%-1#MobaFont%10#0# Nota __DIEZE__1 #-1").unwrap();
-        assert_eq!(
-            (s.kind, s.host.as_str(), s.port, s.user.as_str()),
-            (0, "10.0.0.1", 2222, "root")
-        );
+        assert_eq!((s.kind, s.host.as_str(), s.port, s.user.as_str()), (0, "10.0.0.1", 2222, "root"));
         assert_eq!(s.command, "uptime");
         assert_eq!(s.jump.as_deref(), Some("ops@gw1,gw2:2200"));
         assert_eq!(s.key, "_CurrentDrive_:\\k.ppk");
@@ -280,22 +239,10 @@ mod tests {
         let path = fixture("mobaxterm/MobaXterm.ini");
         let r = import(&path, Some("Maestra-2024")).unwrap();
         let paths: Vec<_> = r.hosts.iter().map(|h| h.host.path()).collect();
-        assert_eq!(
-            paths,
-            [
-                "router",
-                "Clientes/ACME/web-01",
-                "Clientes/ACME/db-01",
-                "Clientes/ACME/Producción/app",
-                "Lab/legacy"
-            ]
-        );
+        assert_eq!(paths, ["router", "Clientes/ACME/web-01", "Clientes/ACME/db-01", "Clientes/ACME/Producción/app", "Lab/legacy"]);
 
         let web = &r.hosts[1];
-        assert_eq!(
-            (web.host.host.as_str(), web.host.port, web.host.user.as_deref()),
-            ("10.20.0.11", None, Some("deploy"))
-        );
+        assert_eq!((web.host.host.as_str(), web.host.port, web.host.user.as_deref()), ("10.20.0.11", None, Some("deploy")));
         assert_eq!(web.password.as_deref(), Some("Web#Pass;2024"));
         assert_eq!(web.host.password, SecretSource::Vault);
         assert_eq!(web.host.notes, "servidor web principal");
@@ -311,10 +258,7 @@ mod tests {
         assert_eq!(app.password.as_deref(), Some("cred-pass"));
 
         let legacy = &r.hosts[4];
-        assert_eq!(
-            legacy.host.identity_file.as_deref(),
-            Some("C:\\Users\\ramiro\\.ssh\\legacy.ppk")
-        );
+        assert_eq!(legacy.host.identity_file.as_deref(), Some("C:\\Users\\ramiro\\.ssh\\legacy.ppk"));
         assert_eq!(legacy.host.password, SecretSource::None);
         assert_eq!(legacy.password, None);
 
@@ -335,11 +279,7 @@ mod tests {
 
         let r = import(&path, Some("wrong")).unwrap();
         assert!(r.hosts.iter().all(|h| h.password.is_none()));
-        assert!(
-            r.warnings.iter().any(|w| w.contains("could not decrypt 3 password(s)")),
-            "{:?}",
-            r.warnings
-        );
+        assert!(r.warnings.iter().any(|w| w.contains("could not decrypt 3 password(s)")), "{:?}", r.warnings);
     }
 
     #[test]

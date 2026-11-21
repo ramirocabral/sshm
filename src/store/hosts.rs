@@ -18,10 +18,18 @@ pub enum SecretSource {
     Vault,
     /// The desktop keyring (Secret Service), through secret-tool.
     Keyring,
-    Bitwarden { item: String },
-    Rbw { item: String },
-    OnePassword { reference: String },
-    Command { command: String },
+    Bitwarden {
+        item: String,
+    },
+    Rbw {
+        item: String,
+    },
+    OnePassword {
+        reference: String,
+    },
+    Command {
+        command: String,
+    },
 }
 
 impl SecretSource {

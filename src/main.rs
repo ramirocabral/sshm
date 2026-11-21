@@ -110,11 +110,8 @@ fn run(cli: Cli) -> Result<()> {
         Some(Cmd::Import { source, file, conflict, remmina_pref }) => {
             let needs_pass = matches!(source, import::Source::Bundle | import::Source::Mobaxterm);
             let passphrase = if needs_pass {
-                let label = if source == import::Source::Bundle {
-                    "Bundle password: "
-                } else {
-                    "MobaXterm master password (Enter if none): "
-                };
+                let label =
+                    if source == import::Source::Bundle { "Bundle password: " } else { "MobaXterm master password (Enter if none): " };
                 Some(prompt_hidden(label)?).filter(|p| !p.is_empty())
             } else {
                 None
@@ -181,9 +178,10 @@ fn check_ssh(cfg: &Config) -> Result<()> {
         .with_context(|| format!("`{}` not found: install the OpenSSH client", cfg.ssh_command))?;
     let version = String::from_utf8_lossy(&out.stderr).to_string() + &String::from_utf8_lossy(&out.stdout);
     if let Some(v) = parse_openssh_version(&version)
-        && v < (8, 4) {
-            bail!("OpenSSH 8.4 or newer is required (found {}.{}): sshm relies on SSH_ASKPASS_REQUIRE", v.0, v.1);
-        }
+        && v < (8, 4)
+    {
+        bail!("OpenSSH 8.4 or newer is required (found {}.{}): sshm relies on SSH_ASKPASS_REQUIRE", v.0, v.1);
+    }
     Ok(())
 }
 

@@ -58,7 +58,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     rects.push((true, draw_panel(f, &mut view.remote, right, &remote_title, focused && remote_active)));
 
     if transfers_h > 0 {
-        let block = Block::default().borders(Borders::TOP).title(" Transfers (x clears finished ones) ").border_style(Style::default().fg(colors().muted));
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .title(" Transfers (x clears finished ones) ")
+            .border_style(Style::default().fg(colors().muted));
         let inner = block.inner(transfers);
         f.render_widget(block, transfers);
         for (i, t) in view.transfers.iter().rev().take(6).enumerate() {
@@ -81,20 +84,31 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             let [label_r, gauge_r] = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(row);
             let label = format!("{arrow} {} · {} / {} · {state}", t.label, human(t.done), human(t.total));
             f.buffer_mut().set_stringn(label_r.x, label_r.y, &label, label_r.width as usize, Style::default().fg(color));
-            let ratio = if t.total == 0 { if t.state == TransferState::Done { 1.0 } else { 0.0 } } else { (t.done as f64 / t.total as f64).min(1.0) };
+            let ratio = if t.total == 0 {
+                if t.state == TransferState::Done { 1.0 } else { 0.0 }
+            } else {
+                (t.done as f64 / t.total as f64).min(1.0)
+            };
             f.render_widget(Gauge::default().ratio(ratio).gauge_style(Style::default().fg(color).bg(colors().panel)), gauge_r);
         }
     }
 
     let help = "Tab side · Enter/l open · h/⌫ up · Space mark · F5/c copy to other side · F6/m rename · F7/n mkdir · F8/d delete · / go to · . hidden · r refresh · q close";
-    let line = Line::from(vec![Span::styled(view.status.clone(), Style::default().fg(colors().text)), Span::raw("  "), Span::styled(help, Style::default().fg(colors().muted))]);
+    let line = Line::from(vec![
+        Span::styled(view.status.clone(), Style::default().fg(colors().text)),
+        Span::raw("  "),
+        Span::styled(help, Style::default().fg(colors().muted)),
+    ]);
     f.render_widget(Paragraph::new(line), status);
     app.layout.sftp_panels = rects;
 }
 
 fn draw_panel(f: &mut Frame, p: &mut Panel, area: Rect, title: &str, focused: bool) -> Rect {
     let color = if focused { colors().accent } else { colors().muted };
-    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(color)).title(Span::styled(title.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color))
+        .title(Span::styled(title.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)));
     let inner = block.inner(area);
     f.render_widget(block, area);
     if p.loading && p.entries.is_empty() {
@@ -102,7 +116,10 @@ fn draw_panel(f: &mut Frame, p: &mut Panel, area: Rect, title: &str, focused: bo
         return inner;
     }
     if let Some(e) = &p.error {
-        f.render_widget(Paragraph::new(e.clone()).style(Style::default().fg(colors().error)).wrap(ratatui::widgets::Wrap { trim: true }), inner);
+        f.render_widget(
+            Paragraph::new(e.clone()).style(Style::default().fg(colors().error)).wrap(ratatui::widgets::Wrap { trim: true }),
+            inner,
+        );
         return inner;
     }
     let h = inner.height as usize;
@@ -128,11 +145,23 @@ fn draw_panel(f: &mut Frame, p: &mut Panel, area: Rect, title: &str, focused: bo
             f.buffer_mut().set_style(Rect { x: inner.x, y, width: inner.width, height: 1 }, style);
         }
         let name = format!("{}{}{}", if marked { "* " } else { "" }, e.name, if e.is_dir && e.name != ".." { "/" } else { "" });
-        let meta = if e.name == ".." { String::new() } else if e.is_dir { fmt_time(e.mtime) } else { format!("{:>7} {}", human(e.size), fmt_time(e.mtime)) };
+        let meta = if e.name == ".." {
+            String::new()
+        } else if e.is_dir {
+            fmt_time(e.mtime)
+        } else {
+            format!("{:>7} {}", human(e.size), fmt_time(e.mtime))
+        };
         f.buffer_mut().set_stringn(inner.x, y, &name, w.saturating_sub(meta_w + 1), style);
         let mx = inner.right().saturating_sub(meta.chars().count() as u16);
         if meta_w > 0 {
-            f.buffer_mut().set_stringn(mx, y, &meta, meta_w, style.fg(if i == p.selected && focused { Color::Reset } else { colors().muted }));
+            f.buffer_mut().set_stringn(
+                mx,
+                y,
+                &meta,
+                meta_w,
+                style.fg(if i == p.selected && focused { Color::Reset } else { colors().muted }),
+            );
         }
     }
     inner

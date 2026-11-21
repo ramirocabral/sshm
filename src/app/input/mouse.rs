@@ -152,7 +152,11 @@ impl App {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let n = form_choices_len(form);
                 if let Some(p) = form.popup.as_mut() {
-                    p.selected = if m.kind == MouseEventKind::ScrollUp { p.selected.saturating_sub(1) } else { (p.selected + 1).min(n.saturating_sub(1)) };
+                    p.selected = if m.kind == MouseEventKind::ScrollUp {
+                        p.selected.saturating_sub(1)
+                    } else {
+                        (p.selected + 1).min(n.saturating_sub(1))
+                    };
                 }
                 FormEvent::None
             }
@@ -172,7 +176,8 @@ impl App {
                 self.focus = Focus::Sidebar;
                 let idx = self.sidebar.scroll + (m.row - list.y) as usize;
                 let now = Instant::now();
-                let double = self.mouse.last_click.is_some_and(|(t, _, y)| now.duration_since(t) < Duration::from_millis(400) && y == m.row);
+                let double =
+                    self.mouse.last_click.is_some_and(|(t, _, y)| now.duration_since(t) < Duration::from_millis(400) && y == m.row);
                 self.mouse.last_click = Some((now, m.column, m.row));
                 if idx < self.sidebar.items(&self.store).len() {
                     self.sidebar.selected = idx;

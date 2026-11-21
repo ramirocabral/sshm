@@ -333,10 +333,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Focus;
     use super::super::dialogs::Dialog;
     use super::super::keymap::Action;
     use super::super::tests::app_with_hosts;
-    use super::super::Focus;
 
     #[test]
     fn actions_without_sessions() {

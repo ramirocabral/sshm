@@ -33,7 +33,8 @@ fn text(f: &mut Frame, x: u16, y: u16, s: &str, w: u16, style: Style) {
 }
 
 fn field_row(f: &mut Frame, inner: Rect, y: u16, label: &str, label_w: u16, focused: bool) -> Rect {
-    let style = if focused { Style::default().fg(colors().accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(colors().subtle) };
+    let style =
+        if focused { Style::default().fg(colors().accent).add_modifier(Modifier::BOLD) } else { Style::default().fg(colors().subtle) };
     text(f, inner.x, y, label, label_w, style);
     Rect { x: inner.x + label_w + 1, y, width: inner.width.saturating_sub(label_w + 1), height: 1 }
 }
@@ -89,7 +90,14 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
             }
             let status_y = inner.y + if two { 5 } else { 4 };
             if u.busy.is_some() {
-                text(f, inner.x, status_y, if u.creating { "Creating the vault…" } else { "Unlocking…" }, inner.width, Style::default().fg(colors().muted));
+                text(
+                    f,
+                    inner.x,
+                    status_y,
+                    if u.creating { "Creating the vault…" } else { "Unlocking…" },
+                    inner.width,
+                    Style::default().fg(colors().muted),
+                );
             } else if let Some(e) = &u.error {
                 text(f, inner.x, status_y, e, inner.width, Style::default().fg(colors().error));
             }
@@ -128,7 +136,12 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
             let rect = centered(area, 96, matches.len() as u16 + 5);
             let inner = frame(f, rect, "Commands", colors().accent);
             text(f, inner.x, inner.y, ">", 1, Style::default().fg(colors().accent));
-            let cursor = p.input.render(Rect { x: inner.x + 2, y: inner.y, width: inner.width.saturating_sub(2), height: 1 }, f.buffer_mut(), true, Style::default());
+            let cursor = p.input.render(
+                Rect { x: inner.x + 2, y: inner.y, width: inner.width.saturating_sub(2), height: 1 },
+                f.buffer_mut(),
+                true,
+                Style::default(),
+            );
             for (i, action) in matches.iter().enumerate() {
                 let y = inner.y + 2 + i as u16;
                 if y >= inner.bottom() {
@@ -177,7 +190,10 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
             };
             let max_scroll = (lines.len() as u16).saturating_sub(list.height.saturating_sub(1));
             app.layout.help_max_scroll = max_scroll;
-            f.render_widget(Paragraph::new(lines).scroll((h.scroll.min(max_scroll), 0)), Rect { height: list.height.saturating_sub(1), ..list });
+            f.render_widget(
+                Paragraph::new(lines).scroll((h.scroll.min(max_scroll), 0)),
+                Rect { height: list.height.saturating_sub(1), ..list },
+            );
             let footer = if h.search.is_some() {
                 "type to filter · Enter keeps the filter · Esc clears it"
             } else if !h.query.is_empty() {

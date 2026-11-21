@@ -16,13 +16,7 @@ pub fn copy(text: &str, override_cmd: Option<&str>) {
     if let Some(cmd) = cmd {
         let mut parts = cmd.split_whitespace();
         let Some(program) = parts.next() else { return };
-        if let Ok(mut child) = Command::new(program)
-            .args(parts)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+        if let Ok(mut child) = Command::new(program).args(parts).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(text.as_bytes());
             }

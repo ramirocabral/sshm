@@ -1,9 +1,9 @@
 //! Host, folder and theme operations behind the host list and its forms.
 
+use super::App;
 use super::dialogs::*;
 use super::form::Choice;
 use super::sidebar::Item;
-use super::App;
 use crate::secrets::SecretKind;
 use crate::store::hosts::{Host, SecretSource, move_target, normalize_folder, parent_folder, rename_target};
 
@@ -27,8 +27,13 @@ impl App {
         } else {
             (false, false)
         };
-        let jump_hosts =
-            self.store.hosts.iter().filter(|h| h.id != host.id).map(|h| Choice::new(h.display_target(), h.path(), h.display_target())).collect();
+        let jump_hosts = self
+            .store
+            .hosts
+            .iter()
+            .filter(|h| h.id != host.id)
+            .map(|h| Choice::new(h.display_target(), h.path(), h.display_target()))
+            .collect();
         let vault_locked = self.vault.exists() && !self.vault.is_unlocked();
         let ctx = HostFormContext { folders: self.store.folders(), jump_hosts, keys: ssh_keys(), saved_password, saved_root, vault_locked };
         self.push_dialog(Dialog::HostForm(Box::new(HostForm::new(&host, editing, ctx))));
@@ -139,7 +144,8 @@ impl App {
             hs => {
                 let names: Vec<String> = hs.iter().take(5).map(|h| h.path()).collect();
                 let more = if hs.len() > 5 { ", …" } else { "" };
-                let body = format!("Delete {} hosts ({}{more})? Their passwords are removed from the vault too.", hs.len(), names.join(", "));
+                let body =
+                    format!("Delete {} hosts ({}{more})? Their passwords are removed from the vault too.", hs.len(), names.join(", "));
                 ("Delete hosts", body)
             }
         };

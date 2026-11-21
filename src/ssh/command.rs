@@ -142,8 +142,21 @@ mod tests {
         assert_eq!(
             spec.args,
             vec![
-                "-p", "2222", "-l", "admin", "-J", "bastion", "-o", "ControlMaster=auto", "-o",
-                "ControlPath=/run/sshm/cm-%C", "-o", "ControlPersist=60", "-o", "ServerAliveInterval=30", "10.0.0.5"
+                "-p",
+                "2222",
+                "-l",
+                "admin",
+                "-J",
+                "bastion",
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                "ControlPath=/run/sshm/cm-%C",
+                "-o",
+                "ControlPersist=60",
+                "-o",
+                "ServerAliveInterval=30",
+                "10.0.0.5"
             ]
         );
         assert!(spec.env.iter().any(|(k, v)| k == "SSH_ASKPASS_REQUIRE" && v == "force"));
@@ -160,7 +173,9 @@ mod tests {
         assert_eq!(classify_prompt("(admin@host) Password: "), PromptKind::Password);
         assert_eq!(classify_prompt("Enter passphrase for key '/home/u/.ssh/id_ed25519': "), PromptKind::Passphrase);
         assert_eq!(
-            classify_prompt("The authenticity of host 'x' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? "),
+            classify_prompt(
+                "The authenticity of host 'x' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? "
+            ),
             PromptKind::Confirm
         );
         assert_eq!(classify_prompt("Verification code: "), PromptKind::Other);

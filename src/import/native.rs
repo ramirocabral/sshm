@@ -15,19 +15,8 @@ use crate::store::hosts::Host;
 
 const VERSION: u32 = 1;
 
-pub(super) const CSV_HEADER: [&str; 11] = [
-    "name",
-    "folder",
-    "host",
-    "port",
-    "user",
-    "identity_file",
-    "jump",
-    "tags",
-    "password",
-    "root_password",
-    "notes",
-];
+pub(super) const CSV_HEADER: [&str; 11] =
+    ["name", "folder", "host", "port", "user", "identity_file", "jump", "tags", "password", "root_password", "notes"];
 
 #[derive(Serialize, Deserialize)]
 struct NativeFile {
@@ -58,11 +47,7 @@ impl Secrets {
         let Some(e) = vault.and_then(|v| v.entry(&host.id)) else {
             return Secrets::default();
         };
-        Secrets {
-            password: e.password.clone(),
-            root_password: e.root_password.clone(),
-            passphrase: e.passphrase.clone(),
-        }
+        Secrets { password: e.password.clone(), root_password: e.root_password.clone(), passphrase: e.passphrase.clone() }
     }
 
     fn is_empty(&self) -> bool {
@@ -73,13 +58,7 @@ impl Secrets {
 fn to_json(hosts: &[Host], vault: Option<&Vault>) -> Result<Vec<u8>> {
     let file = NativeFile {
         version: VERSION,
-        hosts: hosts
-            .iter()
-            .map(|h| NativeHost {
-                host: h.clone(),
-                secrets: Secrets::of(h, vault),
-            })
-            .collect(),
+        hosts: hosts.iter().map(|h| NativeHost { host: h.clone(), secrets: Secrets::of(h, vault) }).collect(),
     };
     Ok(serde_json::to_vec_pretty(&file)?)
 }
@@ -89,9 +68,7 @@ pub(super) fn export_json(hosts: &[Host], vault: Option<&Vault>) -> Result<Vec<u
 }
 
 pub(super) fn export_bundle(hosts: &[Host], vault: Option<&Vault>, passphrase: Option<&str>) -> Result<Vec<u8>> {
-    let Some(pass) = passphrase.filter(|p| !p.is_empty()) else {
-        bail!("a bundle needs a passphrase")
-    };
+    let Some(pass) = passphrase.filter(|p| !p.is_empty()) else { bail!("a bundle needs a passphrase") };
     let mut plain = to_json(hosts, vault)?;
     let out = encrypt_with(&plain, &SecretString::from(pass.to_string()));
     plain.zeroize();
@@ -125,10 +102,7 @@ pub(super) fn export_csv(hosts: &[Host], vault: Option<&Vault>) -> Result<Vec<u8
 pub(super) fn import_json(bytes: &[u8]) -> Result<ImportReport> {
     let file: NativeFile = serde_json::from_slice(bytes).context("not an sshm JSON export")?;
     if file.version != VERSION {
-        bail!(
-            "unsupported export version {} (this sshm reads version {VERSION})",
-            file.version
-        );
+        bail!("unsupported export version {} (this sshm reads version {VERSION})", file.version);
     }
     let mut report = ImportReport::default();
     for (i, mut nh) in file.hosts.into_iter().enumerate() {
@@ -153,11 +127,8 @@ pub(super) fn import_json(bytes: &[u8]) -> Result<ImportReport> {
 }
 
 pub(super) fn import_bundle(bytes: &[u8], passphrase: Option<&str>) -> Result<ImportReport> {
-    let Some(pass) = passphrase else {
-        bail!("the bundle is encrypted; its passphrase is required")
-    };
-    let mut plain =
-        decrypt_with(bytes, &SecretString::from(pass.to_string())).context("could not decrypt the bundle")?;
+    let Some(pass) = passphrase else { bail!("the bundle is encrypted; its passphrase is required") };
+    let mut plain = decrypt_with(bytes, &SecretString::from(pass.to_string())).context("could not decrypt the bundle")?;
     let report = import_json(&plain);
     plain.zeroize();
     report
@@ -165,21 +136,11 @@ pub(super) fn import_bundle(bytes: &[u8], passphrase: Option<&str>) -> Result<Im
 
 pub(super) fn import_csv(bytes: &[u8]) -> Result<ImportReport> {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    let mut rdr = csv::ReaderBuilder::new()
-        .flexible(true)
-        .trim(csv::Trim::All)
-        .from_reader(bytes);
+    let mut rdr = csv::ReaderBuilder::new().flexible(true).trim(csv::Trim::All).from_reader(bytes);
     let headers = rdr.headers().context("the CSV has no header row")?.clone();
-    let cols: HashMap<String, usize> = headers
-        .iter()
-        .enumerate()
-        .map(|(i, h)| (h.to_ascii_lowercase(), i))
-        .collect();
+    let cols: HashMap<String, usize> = headers.iter().enumerate().map(|(i, h)| (h.to_ascii_lowercase(), i)).collect();
     if !cols.contains_key("host") {
-        bail!(
-            "the CSV has no 'host' column (expected header: {})",
-            CSV_HEADER.join(",")
-        );
+        bail!("the CSV has no 'host' column (expected header: {})", CSV_HEADER.join(","));
     }
 
     let mut report = ImportReport::default();
@@ -203,9 +164,7 @@ pub(super) fn import_csv(bytes: &[u8]) -> Result<ImportReport> {
             p => match p.parse::<u16>() {
                 Ok(p) => Some(p),
                 Err(_) => {
-                    report
-                        .warnings
-                        .push(format!("row {line}: invalid port '{p}', using the default"));
+                    report.warnings.push(format!("row {line}: invalid port '{p}', using the default"));
                     None
                 }
             },
@@ -263,9 +222,7 @@ mod tests {
         let op = Host {
             name: "db".into(),
             host: "db.local".into(),
-            password: SecretSource::OnePassword {
-                reference: "op://Infra/db/password".into(),
-            },
+            password: SecretSource::OnePassword { reference: "op://Infra/db/password".into() },
             root_password: SecretSource::None,
             ..Host::default()
         };
@@ -278,14 +235,7 @@ mod tests {
         let tmp = TempDir::new();
         let path = tmp.0.join("export");
         std::fs::write(&path, bytes).unwrap();
-        import(
-            source,
-            &path,
-            &ImportOptions {
-                passphrase: passphrase.map(String::from),
-                remmina_pref: None,
-            },
-        )
+        import(source, &path, &ImportOptions { passphrase: passphrase.map(String::from), remmina_pref: None })
     }
 
     /// Imports into a fresh store + vault and compares hosts and secrets with the original.
@@ -301,33 +251,12 @@ mod tests {
                 assert_eq!(got, orig);
             } else {
                 assert_eq!(
-                    (
-                        &got.host,
-                        got.port,
-                        &got.user,
-                        &got.identity_file,
-                        &got.jump,
-                        &got.tags,
-                        &got.notes
-                    ),
-                    (
-                        &orig.host,
-                        orig.port,
-                        &orig.user,
-                        &orig.identity_file,
-                        &orig.jump,
-                        &orig.tags,
-                        &orig.notes
-                    )
+                    (&got.host, got.port, &got.user, &got.identity_file, &got.jump, &got.tags, &got.notes),
+                    (&orig.host, orig.port, &orig.user, &orig.identity_file, &orig.jump, &orig.tags, &orig.notes)
                 );
             }
             for kind in [SecretKind::Password, SecretKind::RootPassword] {
-                assert_eq!(
-                    new_vault.get(&got.id, kind),
-                    vault.get(&orig.id, kind),
-                    "{kind:?} of {}",
-                    orig.path()
-                );
+                assert_eq!(new_vault.get(&got.id, kind), vault.get(&orig.id, kind), "{kind:?} of {}", orig.path());
             }
         }
     }
@@ -341,16 +270,7 @@ mod tests {
         assert!(text.contains("\"version\": 1") && text.contains("p4ss"));
         let report = import_bytes(Source::Json, &bytes, None).unwrap();
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
-        assert_eq!(
-            report
-                .hosts
-                .iter()
-                .find(|h| h.host.name == "web")
-                .unwrap()
-                .passphrase
-                .as_deref(),
-            Some("frase")
-        );
+        assert_eq!(report.hosts.iter().find(|h| h.host.name == "web").unwrap().passphrase.as_deref(), Some("frase"));
         assert_roundtrip(report, &store, &vault, true);
     }
 
@@ -412,10 +332,7 @@ mod tests {
     fn csv_fixture() {
         let r = import(Source::Csv, &fixture("native/hosts.csv"), &ImportOptions::default()).unwrap();
         let names: Vec<_> = r.hosts.iter().map(|h| h.host.path()).collect();
-        assert_eq!(
-            names,
-            ["Clientes/ACME/web-01", "Clientes/ACME/db-01", "10.1.1.1", "lab/router"]
-        );
+        assert_eq!(names, ["Clientes/ACME/web-01", "Clientes/ACME/db-01", "10.1.1.1", "lab/router"]);
         let web = &r.hosts[0];
         assert_eq!(web.host.port, Some(2222));
         assert_eq!(web.host.tags, ["prod", "web"]);

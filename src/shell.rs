@@ -76,7 +76,10 @@ mod tests {
 
     #[test]
     fn splits_like_sh() {
-        assert_eq!(split(r#" -X -o "ConnectTimeout=10" -o 'A B' c\ d"#).unwrap(), vec!["-X", "-o", "ConnectTimeout=10", "-o", "A B", "c d"]);
+        assert_eq!(
+            split(r#" -X -o "ConnectTimeout=10" -o 'A B' c\ d"#).unwrap(),
+            vec!["-X", "-o", "ConnectTimeout=10", "-o", "A B", "c d"]
+        );
         assert_eq!(split(r#""a\"b" 'it''s' """#).unwrap(), vec![r#"a"b"#, "its", ""]);
         assert!(split("\"open").is_none());
         assert!(split("'open").is_none());

@@ -22,20 +22,14 @@ pub(super) fn parse_ini(text: &str) -> Vec<IniSection> {
             continue;
         }
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            sections.push(IniSection {
-                name: name.trim().to_string(),
-                entries: Vec::new(),
-            });
+            sections.push(IniSection { name: name.trim().to_string(), entries: Vec::new() });
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
         if sections.is_empty() {
-            sections.push(IniSection {
-                name: String::new(),
-                entries: Vec::new(),
-            });
+            sections.push(IniSection { name: String::new(), entries: Vec::new() });
         }
         if let Some(section) = sections.last_mut() {
             section.entries.push((key.trim().to_string(), value.trim().to_string()));
@@ -59,8 +53,8 @@ pub(super) fn decode_text(bytes: &[u8]) -> String {
 
 fn cp1252(b: u8) -> char {
     const HIGH: [char; 32] = [
-        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘',
-        '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•',
+        '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
     ];
     match b {
         0x80..=0x9f => HIGH[(b - 0x80) as usize],
@@ -75,11 +69,7 @@ pub(super) fn clean_segment(s: &str) -> String {
 
 /// Normalizes "a//b/" or " a / b " to "a/b".
 pub(super) fn clean_folder(s: &str) -> String {
-    s.split('/')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join("/")
+    s.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/")
 }
 
 pub(super) fn non_empty(s: &str) -> Option<String> {
@@ -97,10 +87,7 @@ pub(super) fn hex_decode(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
-        .collect()
+    (0..s.len()).step_by(2).map(|i| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok())).collect()
 }
 
 pub(super) fn cbc_decrypt<C: BlockCipherDecrypt>(cipher: &C, iv: &[u8], data: &[u8]) -> Option<Vec<u8>> {
@@ -191,19 +178,11 @@ impl SkipCounter {
 
     pub fn warnings(self, app: &str, only: &str, out: &mut Vec<String>) {
         for (kind, names) in self.0 {
-            let mut list = names
-                .iter()
-                .take(5)
-                .map(|n| format!("'{n}'"))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let mut list = names.iter().take(5).map(|n| format!("'{n}'")).collect::<Vec<_>>().join(", ");
             if names.len() > 5 {
                 list.push_str(&format!(" and {} more", names.len() - 5));
             }
-            out.push(format!(
-                "{app}: skipped {} {kind} session(s) ({list}); only {only} sessions are imported",
-                names.len()
-            ));
+            out.push(format!("{app}: skipped {} {kind} session(s) ({list}); only {only} sessions are imported", names.len()));
         }
     }
 }

@@ -116,8 +116,11 @@ impl TextInput {
         }
         let width = area.width as usize;
         let start = self.cursor.saturating_sub(width.saturating_sub(1));
-        let visible: String =
-            if self.masked { "•".repeat(self.value.chars().count().saturating_sub(start).min(width)) } else { self.value.chars().skip(start).take(width).collect() };
+        let visible: String = if self.masked {
+            "•".repeat(self.value.chars().count().saturating_sub(start).min(width))
+        } else {
+            self.value.chars().skip(start).take(width).collect()
+        };
         if !visible.is_empty() {
             buf.set_stringn(area.x, area.y, &visible, width, style);
         }

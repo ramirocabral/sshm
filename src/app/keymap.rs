@@ -303,7 +303,10 @@ pub static BINDINGS: LazyLock<Vec<Binding>> = LazyLock::new(|| {
         bind(Hosts, &[ch('h'), code(KeyCode::Left)], A::Collapse, ""),
         bind(Hosts, &[code(KeyCode::Enter)], A::Activate, "connect (or open every marked host in a grid)").short("connect").welcome(),
         bind(Hosts, &[ch(' ')], A::Mark, "mark host (on a folder: marks all)").short("mark").welcome(),
-        bind(Hosts, &[ch('v'), ch('V')], A::Visual, "select a range with j/k, then act on all of it at once").help_keys("v / V").short("select").welcome(),
+        bind(Hosts, &[ch('v'), ch('V')], A::Visual, "select a range with j/k, then act on all of it at once")
+            .help_keys("v / V")
+            .short("select")
+            .welcome(),
         bind(Hosts, &[ch('o')], A::ActivateHere, "open in the current tab").short("add to tab").welcome(),
         bind(Hosts, &[ch('s')], A::Sftp, "SFTP").short("sftp").welcome(),
         bind(Hosts, &[ch('n')], A::NewHost, "new / edit (on a folder: rename) / duplicate / delete host")
@@ -313,8 +316,11 @@ pub static BINDINGS: LazyLock<Vec<Binding>> = LazyLock::new(|| {
         bind(Hosts, &[ch('e')], A::Edit, "").short("host"),
         bind(Hosts, &[ch('c')], A::CopyHost, ""),
         bind(Hosts, &[ch('d'), code(KeyCode::Delete)], A::DeleteHosts, "").short("host"),
-        bind(Hosts, &[ch('m')], A::MoveHosts, "move the marked hosts, or the folder/host under the cursor, to another folder").short("move"),
-        bind(Hosts, &[ch('/')], A::Search, "search (fuzzy: name, host, user or tag); Ctrl+j/k moves while typing").short("search").welcome(),
+        bind(Hosts, &[ch('m')], A::MoveHosts, "move the marked hosts, or the folder/host under the cursor, to another folder")
+            .short("move"),
+        bind(Hosts, &[ch('/')], A::Search, "search (fuzzy: name, host, user or tag); Ctrl+j/k moves while typing")
+            .short("search")
+            .welcome(),
         bind(Hosts, &[ch('y')], A::CopyTarget, "copy user@host"),
         bind(Hosts, &[ch('i')], A::Import, "import / export").help_keys("i / x").welcome(),
         bind(Hosts, &[ch('x')], A::Export, ""),

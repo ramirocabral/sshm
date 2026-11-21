@@ -13,9 +13,7 @@ use blowfish::cipher::KeyInit;
 use md5::{Digest, Md5};
 use serde_yaml_ng::Value;
 
-use super::util::{
-    SkipCounter, cbc_decrypt, clean_folder, clean_segment, hex_decode, non_empty, pkcs7_unpad, port_opt,
-};
+use super::util::{SkipCounter, cbc_decrypt, clean_folder, clean_segment, hex_decode, non_empty, pkcs7_unpad, port_opt};
 use super::{ImportReport, ImportedHost};
 use crate::shell;
 use crate::store::hosts::{Host, SecretSource};
@@ -78,15 +76,8 @@ fn jump_from(v: &Value) -> Option<String> {
     if ip.is_empty() {
         return None;
     }
-    let user = non_empty(&text(v, "jump user"))
-        .map(|u| format!("{u}@"))
-        .unwrap_or_default();
-    let port = text(v, "jump port")
-        .parse::<u16>()
-        .ok()
-        .and_then(port_opt)
-        .map(|p| format!(":{p}"))
-        .unwrap_or_default();
+    let user = non_empty(&text(v, "jump user")).map(|u| format!("{u}@")).unwrap_or_default();
+    let port = text(v, "jump port").parse::<u16>().ok().and_then(port_opt).map(|p| format!(":{p}")).unwrap_or_default();
     Some(format!("{user}{ip}{port}"))
 }
 
@@ -112,19 +103,12 @@ pub(super) fn parse(text_yaml: &str) -> Result<ImportReport> {
         .and_then(Value::as_mapping)
         .ok_or_else(|| anyhow!("not an Ásbrú/PAC configuration (no 'environments' key)"))?;
     let defaults = doc.get("defaults").cloned().unwrap_or(Value::Null);
-    let global_jump = (text(&defaults, "proxy") == "Jump")
-        .then(|| jump_from(&defaults))
-        .flatten();
+    let global_jump = (text(&defaults, "proxy") == "Jump").then(|| jump_from(&defaults)).flatten();
 
     let groups: HashMap<String, (String, String)> = envs
         .iter()
         .filter(|(_, v)| truthy(v, "_is_group"))
-        .filter_map(|(k, v)| {
-            Some((
-                k.as_str().filter(|k| *k != ROOT)?.to_string(),
-                (text(v, "name"), text(v, "parent")),
-            ))
-        })
+        .filter_map(|(k, v)| Some((k.as_str().filter(|k| *k != ROOT)?.to_string(), (text(v, "name"), text(v, "parent")))))
         .collect();
 
     let mut report = ImportReport::default();
@@ -146,10 +130,7 @@ pub(super) fn parse(text_yaml: &str) -> Result<ImportReport> {
             continue;
         }
         let addr = text(v, "ip");
-        let name = [text(v, "name"), text(v, "title"), addr.clone()]
-            .into_iter()
-            .find(|s| !s.is_empty())
-            .unwrap_or_default();
+        let name = [text(v, "name"), text(v, "title"), addr.clone()].into_iter().find(|s| !s.is_empty()).unwrap_or_default();
         let method = text(v, "method");
         if !method.eq_ignore_ascii_case("SSH") {
             skipped.add(if method.is_empty() { "unknown" } else { &method }, &name);
@@ -174,9 +155,7 @@ pub(super) fn parse(text_yaml: &str) -> Result<ImportReport> {
         let ssh_args = match shell::split(&text(v, "options")) {
             Some(args) => args,
             None => {
-                report.warnings.push(format!(
-                    "{APP}: '{name}' has ssh options with an unterminated quote; ignored"
-                ));
+                report.warnings.push(format!("{APP}: '{name}' has ssh options with an unterminated quote; ignored"));
                 Vec::new()
             }
         };
@@ -187,23 +166,11 @@ pub(super) fn parse(text_yaml: &str) -> Result<ImportReport> {
             host: addr,
             port: text(v, "port").parse::<u16>().ok().and_then(port_opt),
             user: non_empty(&text(v, "user")),
-            identity_file: if key_auth {
-                non_empty(&text(v, "public key"))
-            } else {
-                None
-            },
+            identity_file: if key_auth { non_empty(&text(v, "public key")) } else { None },
             jump,
-            notes: if description == format!("Connection with '{name}'") {
-                String::new()
-            } else {
-                description
-            },
+            notes: if description == format!("Connection with '{name}'") { String::new() } else { description },
             ssh_args,
-            password: if text(v, "auth type") == "userpass" {
-                SecretSource::Vault
-            } else {
-                SecretSource::None
-            },
+            password: if text(v, "auth type") == "userpass" { SecretSource::Vault } else { SecretSource::None },
             root_password: SecretSource::None,
             ..Host::default()
         };
@@ -217,14 +184,10 @@ pub(super) fn parse(text_yaml: &str) -> Result<ImportReport> {
 
     skipped.warnings(APP, "SSH", &mut report.warnings);
     if failed > 0 {
-        report
-            .warnings
-            .push(format!("{APP}: could not decrypt {failed} password(s)"));
+        report.warnings.push(format!("{APP}: could not decrypt {failed} password(s)"));
     }
     if proxied > 0 {
-        report.warnings.push(format!(
-            "{APP}: {proxied} connection(s) use a SOCKS/HTTP proxy, which was not imported"
-        ));
+        report.warnings.push(format!("{APP}: {proxied} connection(s) use a SOCKS/HTTP proxy, which was not imported"));
     }
     Ok(report)
 }
@@ -238,10 +201,7 @@ mod tests {
     /// unrelated public asbru.yml/pac.yml files (salt "12345678"). It must decrypt to one block of PKCS#5 padding.
     #[test]
     fn published_empty_vector() {
-        assert_eq!(
-            decrypt("53616c7465645f5f3132333435363738a9fd581c1ddfc1c2").as_deref(),
-            Some("")
-        );
+        assert_eq!(decrypt("53616c7465645f5f3132333435363738a9fd581c1ddfc1c2").as_deref(), Some(""));
         assert_eq!(decrypt("53616c7465645f5f3132333435363738a9fd581c1ddfc1c3"), None);
         assert_eq!(decrypt("not hex"), None);
         assert_eq!(decrypt("53616c7465645f5f"), None);
@@ -251,21 +211,10 @@ mod tests {
     fn parses_fixture() {
         let r = import(&fixture("asbru/asbru.yml")).unwrap();
         let paths: Vec<_> = r.hosts.iter().map(|h| h.host.path()).collect();
-        assert_eq!(
-            paths,
-            [
-                "Clientes/ACME/web-01",
-                "Clientes/ACME/Base de datos/db-01",
-                "Lab/nas",
-                "router"
-            ]
-        );
+        assert_eq!(paths, ["Clientes/ACME/web-01", "Clientes/ACME/Base de datos/db-01", "Lab/nas", "router"]);
 
         let web = &r.hosts[0];
-        assert_eq!(
-            (web.host.host.as_str(), web.host.port, web.host.user.as_deref()),
-            ("10.20.0.11", Some(2222), Some("deploy"))
-        );
+        assert_eq!((web.host.host.as_str(), web.host.port, web.host.user.as_deref()), ("10.20.0.11", Some(2222), Some("deploy")));
         assert_eq!(web.password.as_deref(), Some("Contraseña-ñ#1"));
         assert_eq!(web.host.password, SecretSource::Vault);
         assert_eq!(web.host.ssh_args, ["-C", "-o", "ServerAliveInterval=20"]);

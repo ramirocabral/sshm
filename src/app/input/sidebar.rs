@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::super::App;
 use super::super::keymap::{self, Ctx};
 use super::super::sidebar::Item;
-use super::super::App;
 
 impl App {
     pub(super) fn sidebar_key(&mut self, key: KeyEvent) {

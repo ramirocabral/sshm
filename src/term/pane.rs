@@ -166,33 +166,31 @@ impl TermPane {
 
         let thread_emu = emu.clone();
         let thread_dirty = dirty.clone();
-        std::thread::Builder::new()
-            .name(format!("pty-{id}"))
-            .spawn(move || {
-                let mut buf = vec![0u8; 64 * 1024];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Ok(mut e) = thread_emu.lock() {
-                                e.advance(&buf[..n]);
-                            }
-                            if !thread_dirty.swap(true, Ordering::AcqRel) {
-                                notify(id, PaneNotify::Output);
-                            }
+        std::thread::Builder::new().name(format!("pty-{id}")).spawn(move || {
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut e) = thread_emu.lock() {
+                            e.advance(&buf[..n]);
                         }
-                        Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                            if !wait_for(&reader, libc::POLLIN, -1) {
-                                break;
-                            }
+                        if !thread_dirty.swap(true, Ordering::AcqRel) {
+                            notify(id, PaneNotify::Output);
                         }
-                        Err(_) => break,
                     }
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                        if !wait_for(&reader, libc::POLLIN, -1) {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
                 }
-                let code = child.wait().ok().map(|s| s.exit_code());
-                notify(id, PaneNotify::Exited(code));
-            })?;
+            }
+            let code = child.wait().ok().map(|s| s.exit_code());
+            notify(id, PaneNotify::Exited(code));
+        })?;
 
         Ok(TermPane { emu, input, master: pair.master, killer, size: shared_size, dirty, closed })
     }

@@ -31,11 +31,7 @@ pub fn encode(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
     };
 
     let tilde_key = |n: u8| -> Vec<u8> {
-        if modifier_param > 1 {
-            format!("\x1b[{n};{modifier_param}~").into_bytes()
-        } else {
-            format!("\x1b[{n}~").into_bytes()
-        }
+        if modifier_param > 1 { format!("\x1b[{n};{modifier_param}~").into_bytes() } else { format!("\x1b[{n}~").into_bytes() }
     };
 
     let bytes = match key.code {
@@ -84,11 +80,7 @@ pub fn encode(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
         KeyCode::PageDown => tilde_key(6),
         KeyCode::F(n @ 1..=4) => {
             let c = (b'P' + n - 1) as char;
-            if modifier_param > 1 {
-                format!("\x1b[1;{modifier_param}{c}").into_bytes()
-            } else {
-                format!("\x1bO{c}").into_bytes()
-            }
+            if modifier_param > 1 { format!("\x1b[1;{modifier_param}{c}").into_bytes() } else { format!("\x1bO{c}").into_bytes() }
         }
         KeyCode::F(n @ 5..=12) => {
             let code = match n {

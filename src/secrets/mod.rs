@@ -72,10 +72,7 @@ fn reader(mut r: impl Read + Send + 'static, tx: mpsc::Sender<(bool, Vec<u8>)>, 
 /// it did not finish within `timeout`; then it is killed along with anything it started.
 pub(crate) fn run_with_timeout(cmd: &mut Command, input: Option<&[u8]>, timeout: Duration) -> std::io::Result<Option<Output>> {
     let deadline = Instant::now() + timeout;
-    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let mut child = cmd.spawn()?;
     let (tx, rx) = mpsc::channel();
     if let Some(out) = child.stdout.take() {

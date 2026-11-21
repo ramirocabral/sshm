@@ -18,11 +18,21 @@ impl Choice {
 pub enum FieldKind {
     Text(TextInput),
     /// `stored`: a value already exists (shown as a placeholder); `cleared`: user asked to delete it.
-    Secret { input: TextInput, stored: bool, cleared: bool },
+    Secret {
+        input: TextInput,
+        stored: bool,
+        cleared: bool,
+    },
     Toggle(bool),
-    Select { options: Vec<Choice>, selected: usize },
+    Select {
+        options: Vec<Choice>,
+        selected: usize,
+    },
     /// Free text with a list of suggestions.
-    Combo { input: TextInput, options: Vec<Choice> },
+    Combo {
+        input: TextInput,
+        options: Vec<Choice>,
+    },
 }
 
 pub struct Field {
@@ -425,9 +435,10 @@ impl Form {
                     }
                     _ if typing => {
                         if let Some(i) = self.fields[field].input_mut()
-                            && i.handle_key(key) {
-                                self.dirty = true;
-                            }
+                            && i.handle_key(key)
+                        {
+                            self.dirty = true;
+                        }
                         let n = self.choices(field).len();
                         if n == 0 {
                             self.popup = None;

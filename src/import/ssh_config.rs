@@ -15,11 +15,7 @@ const FOLDER: &str = "ssh_config";
 const MAX_DEPTH: usize = 16;
 
 pub(super) fn import(path: &Path) -> Result<ImportReport> {
-    let base = if path.starts_with("/etc/ssh") {
-        PathBuf::from("/etc/ssh")
-    } else {
-        paths::home().join(".ssh")
-    };
+    let base = if path.starts_with("/etc/ssh") { PathBuf::from("/etc/ssh") } else { paths::home().join(".ssh") };
     parse(path, &base)
 }
 
@@ -40,31 +36,14 @@ struct Parser<'a> {
 /// `base` is where relative `Include` paths resolve (~/.ssh for user configs).
 pub(super) fn parse(path: &Path, base: &Path) -> Result<ImportReport> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let global = Block {
-        patterns: vec!["*".into()],
-        is_match: false,
-        options: Vec::new(),
-    };
-    let mut p = Parser {
-        base,
-        blocks: vec![global],
-        aliases: Vec::new(),
-        stack: vec![path.to_path_buf()],
-        warnings: Vec::new(),
-    };
+    let global = Block { patterns: vec!["*".into()], is_match: false, options: Vec::new() };
+    let mut p = Parser { base, blocks: vec![global], aliases: Vec::new(), stack: vec![path.to_path_buf()], warnings: Vec::new() };
     p.feed(&text, path);
 
-    let mut report = ImportReport {
-        hosts: Vec::new(),
-        warnings: std::mem::take(&mut p.warnings),
-    };
+    let mut report = ImportReport { hosts: Vec::new(), warnings: std::mem::take(&mut p.warnings) };
     for alias in &p.aliases {
         let mut opts: HashMap<&str, &str> = HashMap::new();
-        for b in p
-            .blocks
-            .iter()
-            .filter(|b| !b.is_match && host_matches(alias, &b.patterns))
-        {
+        for b in p.blocks.iter().filter(|b| !b.is_match && host_matches(alias, &b.patterns)) {
             for (k, v) in &b.options {
                 opts.entry(k.as_str()).or_insert(v.as_str());
             }
@@ -72,17 +51,11 @@ pub(super) fn parse(path: &Path, base: &Path) -> Result<ImportReport> {
         let port = opts.get("port").and_then(|v| match v.parse::<u16>() {
             Ok(p) => port_opt(p),
             Err(_) => {
-                report
-                    .warnings
-                    .push(format!("ssh_config: '{alias}' has an invalid port '{v}'"));
+                report.warnings.push(format!("ssh_config: '{alias}' has an invalid port '{v}'"));
                 None
             }
         });
-        let not_none = |key: &str| {
-            opts.get(key)
-                .filter(|v| !v.eq_ignore_ascii_case("none"))
-                .map(|v| v.to_string())
-        };
+        let not_none = |key: &str| opts.get(key).filter(|v| !v.eq_ignore_ascii_case("none")).map(|v| v.to_string());
         let host = Host {
             name: clean_segment(alias),
             folder: FOLDER.into(),
@@ -109,8 +82,7 @@ impl Parser<'_> {
             }
             let (keyword, rest) = split_keyword(line);
             let Some(args) = split_args(rest) else {
-                self.warnings
-                    .push(format!("ssh_config: {}:{}: unterminated quote", file.display(), n + 1));
+                self.warnings.push(format!("ssh_config: {}:{}: unterminated quote", file.display(), n + 1));
                 continue;
             };
             match keyword.to_ascii_lowercase().as_str() {
@@ -120,17 +92,9 @@ impl Parser<'_> {
                             self.aliases.push(a.clone());
                         }
                     }
-                    self.blocks.push(Block {
-                        patterns: args,
-                        is_match: false,
-                        options: Vec::new(),
-                    });
+                    self.blocks.push(Block { patterns: args, is_match: false, options: Vec::new() });
                 }
-                "match" => self.blocks.push(Block {
-                    patterns: Vec::new(),
-                    is_match: true,
-                    options: Vec::new(),
-                }),
+                "match" => self.blocks.push(Block { patterns: Vec::new(), is_match: true, options: Vec::new() }),
                 "include" => {
                     for arg in &args {
                         self.include(arg, file);
@@ -147,10 +111,7 @@ impl Parser<'_> {
 
     fn include(&mut self, arg: &str, from: &Path) {
         if self.stack.len() > MAX_DEPTH {
-            self.warnings.push(format!(
-                "ssh_config: too many nested Include directives in {}",
-                from.display()
-            ));
+            self.warnings.push(format!("ssh_config: too many nested Include directives in {}", from.display()));
             return;
         }
         let mut files = if let Some(rest) = arg.strip_prefix("~/") {
@@ -165,13 +126,11 @@ impl Parser<'_> {
             }
         };
         if files.is_empty() {
-            self.warnings
-                .push(format!("ssh_config: Include {arg}: no matching files"));
+            self.warnings.push(format!("ssh_config: Include {arg}: no matching files"));
         }
         for f in files.drain(..) {
             if self.stack.contains(&f) {
-                self.warnings
-                    .push(format!("ssh_config: recursive Include of {}, ignored", f.display()));
+                self.warnings.push(format!("ssh_config: recursive Include of {}, ignored", f.display()));
                 continue;
             }
             match std::fs::read_to_string(&f) {
@@ -180,9 +139,7 @@ impl Parser<'_> {
                     self.feed(&text, &f);
                     self.stack.pop();
                 }
-                Err(e) => self
-                    .warnings
-                    .push(format!("ssh_config: could not read {}: {e}", f.display())),
+                Err(e) => self.warnings.push(format!("ssh_config: could not read {}: {e}", f.display())),
             }
         }
     }
@@ -193,18 +150,11 @@ impl Parser<'_> {
             return Vec::new();
         };
         if dir.to_string_lossy().contains(['*', '?']) {
-            self.warnings.push(format!(
-                "ssh_config: Include {}: wildcards are only supported in the file name",
-                path.display()
-            ));
+            self.warnings.push(format!("ssh_config: Include {}: wildcards are only supported in the file name", path.display()));
             return Vec::new();
         }
         if !pattern.contains(['*', '?']) {
-            return if path.is_file() {
-                vec![path.to_path_buf()]
-            } else {
-                Vec::new()
-            };
+            return if path.is_file() { vec![path.to_path_buf()] } else { Vec::new() };
         }
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
@@ -296,10 +246,7 @@ mod tests {
         assert_eq!(split_keyword("Port=2222"), ("Port", "2222"));
         assert_eq!(split_keyword("Port = 2222"), ("Port", "2222"));
         assert_eq!(split_keyword("HostName\tx"), ("HostName", "x"));
-        assert_eq!(
-            split_args(r#"a "b c" 'd e' f\ g # comment"#).unwrap(),
-            ["a", "b c", "d e", "f g"]
-        );
+        assert_eq!(split_args(r#"a "b c" 'd e' f\ g # comment"#).unwrap(), ["a", "b c", "d e", "f g"]);
         assert_eq!(split_args(r#"x"y z"w"#).unwrap(), ["xy zw"]);
         assert!(split_args("\"open").is_none());
         assert!(host_matches("Web1", &["web*".into(), "!web2".into()]));
@@ -310,25 +257,10 @@ mod tests {
     fn parses_fixture() {
         let dir = fixture("ssh_config");
         let r = parse(&dir.join("config"), &dir).unwrap();
-        let get = |n: &str| {
-            &r.hosts
-                .iter()
-                .find(|h| h.host.name == n)
-                .unwrap_or_else(|| panic!("missing {n}"))
-                .host
-        };
+        let get = |n: &str| &r.hosts.iter().find(|h| h.host.name == n).unwrap_or_else(|| panic!("missing {n}")).host;
         let names: Vec<_> = r.hosts.iter().map(|h| h.host.name.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "work-gw", "work-app", "home-nas", "bastion", "web1", "web2", "db", "quoted", "eq", "bad-port"
-            ]
-        );
-        assert!(
-            r.hosts
-                .iter()
-                .all(|h| h.host.folder == "ssh_config" && h.host.password == SecretSource::None)
-        );
+        assert_eq!(names, ["work-gw", "work-app", "home-nas", "bastion", "web1", "web2", "db", "quoted", "eq", "bad-port"]);
+        assert!(r.hosts.iter().all(|h| h.host.folder == "ssh_config" && h.host.password == SecretSource::None));
 
         let web1 = get("web1");
         assert_eq!(web1.host, "web1");

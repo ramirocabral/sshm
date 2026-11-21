@@ -136,14 +136,28 @@ pub fn map_color(c: AColor, opts: &RenderOpts) -> Color {
 
 /// Nearest xterm-256 color (6x6x6 cube or grayscale ramp).
 pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
-    let to_cube = |v: u8| -> u8 { if v < 48 { 0 } else if v < 115 { 1 } else { (v - 35) / 40 } };
+    let to_cube = |v: u8| -> u8 {
+        if v < 48 {
+            0
+        } else if v < 115 {
+            1
+        } else {
+            (v - 35) / 40
+        }
+    };
     let (cr, cg, cb) = (to_cube(r), to_cube(g), to_cube(b));
     let cube_val = |c: u8| if c == 0 { 0 } else { 55 + c as i32 * 40 };
     let cube_idx = 16 + 36 * cr + 6 * cg + cb;
     let cube_dist = sq(cube_val(cr) - r as i32) + sq(cube_val(cg) - g as i32) + sq(cube_val(cb) - b as i32);
 
     let avg = (r as i32 + g as i32 + b as i32) / 3;
-    let gray_step = if avg > 238 { 23 } else if avg < 8 { 0 } else { ((avg - 8) / 10) as u8 };
+    let gray_step = if avg > 238 {
+        23
+    } else if avg < 8 {
+        0
+    } else {
+        ((avg - 8) / 10) as u8
+    };
     let gray_val = 8 + gray_step as i32 * 10;
     let gray_dist = sq(gray_val - r as i32) + sq(gray_val - g as i32) + sq(gray_val - b as i32);
 
