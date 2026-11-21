@@ -68,7 +68,9 @@ injected as raw SGR sequences with `send-keys -l`.
   `app/sftp.rs`.
 - **Forms** (`app/form.rs` state + keys, `ui/form.rs` rendering) are generic: fields are
   Text, Secret, Toggle, Select (closed list) or Combo (free text + suggestions), grouped in
-  sections, with per-field hints and a popup list. Anything with a fixed set of values must
+  sections, with per-field hints and a popup list. `/` in any popup list (or on a Select/Combo
+  field) searches all its options, fuzzy on label, value and detail (`Form::choices`), so long
+  lists such as host pickers need nothing of their own. Anything with a fixed set of values must
   be a Select, not free text. Owners (`HostForm`, `ImportForm`, `ExportForm` in
   `app/dialogs.rs`) react to `FormEvent::Changed` to show/hide dependent fields;
   `Dialog::form_mut` gives every form dialog the same key/paste/mouse path.

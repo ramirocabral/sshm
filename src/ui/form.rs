@@ -209,16 +209,20 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
     }
 
     let insert = form.mode == Mode::Insert;
+    let searching = form.searching().is_some();
     let action = match (form.focused_field().map(|f| &f.kind), form.focused_button(), insert) {
+        _ if searching => "type to search · Enter picks · Esc back to the list",
+        _ if form.popup.is_some() && insert => "type to filter · Enter picks",
+        _ if form.popup.is_some() => "Enter picks · / search · Esc closes",
         (_, Some(_), _) => "Enter activates · h/l switch",
         (_, _, true) => "Esc normal mode · Enter next",
-        (Some(FieldKind::Select { .. }), _, _) => "h/l change · Enter list",
-        (Some(FieldKind::Combo { options, .. }), _, _) if !options.is_empty() => "i edit · Enter suggestions · D clear",
+        (Some(FieldKind::Select { .. }), _, _) => "h/l change · Enter list · / search",
+        (Some(FieldKind::Combo { options, .. }), _, _) if !options.is_empty() => "i edit · Enter suggestions · / search · D clear",
         (Some(FieldKind::Toggle(_)), _, _) => "Space or h/l toggles",
         (Some(FieldKind::Secret { .. }), _, _) => "i type · D delete the saved one",
         _ => "i edit · S replace · D clear",
     };
-    let moves = if insert { "Ctrl+j/k move" } else { "j/k move" };
+    let moves = if insert || searching { "Ctrl+j/k move" } else { "j/k move" };
     let quit = if insert { "" } else { " · q cancel" };
     let (badge, badge_style) = if insert {
         (" INSERT ", Style::default().fg(colors().on_color).bg(colors().success).add_modifier(Modifier::BOLD))
@@ -238,19 +242,38 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
 
     if let (Some(p), Some(anchor)) = (&form.popup, focus_box) {
         let choices = form.choices(p.field);
-        let max_items = 10usize.min(choices.len());
-        let label_max = choices.iter().map(|c| c.label.chars().count()).max().unwrap_or(10);
-        let detail_max = choices.iter().map(|c| c.detail.chars().count()).max().unwrap_or(0);
+        // Sized for every option, so the box keeps still while a search narrows the list.
+        let all = form.options(p.field);
+        let max_items = 10usize.min(if searching { all.len() } else { choices.len() });
+        let label_max = all.iter().map(|c| c.label.chars().count()).max().unwrap_or(10);
+        let detail_max = all.iter().map(|c| c.detail.chars().count()).max().unwrap_or(0);
         let pw = ((label_max + detail_max + 6) as u16).max(anchor.width.min(40)).min(area.right().saturating_sub(anchor.x));
-        let ph = max_items as u16 + 2;
+        let ph = max_items as u16 + 2 + u16::from(searching);
         let below = anchor.y + 1;
         let py = if below + ph <= area.bottom() { below } else { anchor.y.saturating_sub(ph) };
         let prect = Rect { x: anchor.x, y: py, width: pw, height: ph };
         f.render_widget(Clear, prect);
-        let pblock =
+        let muted = Style::default().fg(colors().muted);
+        let mut pblock =
             Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(colors().accent));
-        let pin = pblock.inner(prect);
+        let typing = insert && matches!(form.fields[p.field].kind, FieldKind::Combo { .. });
+        if searching {
+            pblock = pblock.title_bottom(Span::styled(format!(" {}/{} ", choices.len(), all.len()), muted));
+        } else if !typing && all.len() > 5 {
+            pblock = pblock.title_bottom(Span::styled(" / search ", muted));
+        }
+        let mut pin = pblock.inner(prect);
         f.render_widget(pblock, prect);
+        let mut search_cursor = None;
+        if let Some(q) = form.searching() {
+            put(f, pin.x + 1, pin.y, "/", 1, Style::default().fg(colors().accent).add_modifier(Modifier::BOLD));
+            let r = Rect { x: pin.x + 2, y: pin.y, width: pin.width.saturating_sub(3), height: 1 };
+            search_cursor = q.render_plain(r, f.buffer_mut(), true, Style::default());
+            pin = Rect { y: pin.y + 1, height: pin.height.saturating_sub(1), ..pin };
+            if choices.is_empty() {
+                put(f, pin.x + 1, pin.y, "no matches", pin.width.saturating_sub(1), muted.add_modifier(Modifier::ITALIC));
+            }
+        }
         let start = if p.selected >= max_items { p.selected + 1 - max_items } else { 0 };
         for (row, (idx, c)) in choices.iter().enumerate().skip(start).take(max_items).enumerate() {
             let y = pin.y + row as u16;
@@ -267,7 +290,9 @@ pub fn draw(f: &mut Frame, form: &Form, area: Rect, width: u16) -> FormLayout {
             }
             out.popup.push((idx, r));
         }
-        if !matches!(form.fields[p.field].kind, FieldKind::Combo { .. }) {
+        if searching {
+            out.cursor = search_cursor;
+        } else if !matches!(form.fields[p.field].kind, FieldKind::Combo { .. }) {
             out.cursor = None;
         }
     }

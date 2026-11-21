@@ -443,7 +443,7 @@ impl HostForm {
                 .hint("Empty = the user from ~/.ssh/config, or yours"),
             Field::combo("jump", "Jump host", opt(&host.jump), ctx.jump_hosts)
                 .placeholder("none")
-                .hint("Connect through another host (ProxyJump). Enter lists your hosts, or type user@host:port"),
+                .hint("Connect through another host (ProxyJump). Enter lists your hosts (/ searches them), or type user@host:port"),
             Field::combo("identity", "Private key", opt(&host.identity_file), ctx.keys)
                 .section("Authentication")
                 .placeholder("ssh-agent / ~/.ssh/config")
@@ -649,7 +649,7 @@ impl TunnelForm {
                 .hint("How the tunnel shows up in the list"),
             Field::combo("host", "Through host", host_path, hosts)
                 .placeholder("required")
-                .hint("The SSH server the tunnel goes through. Enter lists your hosts"),
+                .hint("The SSH server the tunnel goes through. Enter lists your hosts, / searches them"),
             Field::select("kind", "Type", kinds, tunnel.kind.value()),
             Field::text("bind_port", "Local port", port(tunnel.bind_port)).placeholder("required"),
             Field::text("dest_host", "Remote host", tunnel.dest_host.clone()).placeholder("localhost"),

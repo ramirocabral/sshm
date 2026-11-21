@@ -1,4 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use nucleo::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo::{Config as MatchConfig, Matcher, Utf32Str};
 
 use super::widgets::TextInput;
 
@@ -104,6 +106,27 @@ impl Field {
 pub struct Popup {
     pub field: usize,
     pub selected: usize,
+    /// `/`: a search over every option of the list, while it is being typed.
+    pub search: Option<TextInput>,
+}
+
+/// The options matching `query` (fuzzy, on label, value and detail), best first; all when it is empty.
+fn search<'a>(options: &'a [Choice], query: &str) -> Vec<&'a Choice> {
+    if query.trim().is_empty() {
+        return options.iter().collect();
+    }
+    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+    let mut matcher = Matcher::new(MatchConfig::DEFAULT);
+    let mut buf = Vec::new();
+    let mut scored: Vec<(u32, &Choice)> = options
+        .iter()
+        .filter_map(|c| {
+            let hay = format!("{} {} {}", c.label, c.value, c.detail);
+            pattern.score(Utf32Str::new(&hay, &mut buf), &mut matcher).map(|s| (s, c))
+        })
+        .collect();
+    scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+    scored.into_iter().map(|(_, c)| c).collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,8 +276,20 @@ impl Form {
         self.focus = vis[((pos + delta).rem_euclid(n)) as usize];
     }
 
-    /// Options shown in the popup of a field; combos filter them by what is typed.
+    /// Every option of a list field.
+    pub fn options(&self, field: usize) -> &[Choice] {
+        match &self.fields[field].kind {
+            FieldKind::Select { options, .. } | FieldKind::Combo { options, .. } => options,
+            _ => &[],
+        }
+    }
+
+    /// Options shown in the popup of a field; combos filter them by what is typed, and a `/`
+    /// search looks through all of them.
     pub fn choices(&self, field: usize) -> Vec<&Choice> {
+        if let Some(q) = self.popup.as_ref().filter(|p| p.field == field).and_then(|p| p.search.as_ref()) {
+            return search(self.options(field), &q.value);
+        }
         match &self.fields[field].kind {
             FieldKind::Select { options, .. } => options.iter().collect(),
             FieldKind::Combo { input, options } => {
@@ -280,8 +315,19 @@ impl Form {
             FieldKind::Combo { input, .. } => choices.iter().position(|c| c.value == input.value.trim()).unwrap_or(0),
             _ => 0,
         };
-        self.popup = Some(Popup { field, selected });
+        self.popup = Some(Popup { field, selected, search: None });
         true
+    }
+
+    /// `/` on a list field: the list opens, searching every option.
+    fn open_search(&mut self) {
+        if !self.options(self.focus).is_empty() {
+            self.popup = Some(Popup { field: self.focus, selected: 0, search: Some(TextInput::default()) });
+        }
+    }
+
+    pub fn searching(&self) -> Option<&TextInput> {
+        self.popup.as_ref()?.search.as_ref()
     }
 
     /// Picks the `n`th entry currently listed in the open popup.
@@ -292,12 +338,11 @@ impl Form {
     }
 
     pub fn choose(&mut self, n: usize) -> FormEvent {
-        let Some(p) = self.popup.take() else { return FormEvent::None };
-        let value = match self.choices(p.field).get(n) {
-            Some(c) => c.value.clone(),
-            None => return FormEvent::None,
-        };
-        let field = &mut self.fields[p.field];
+        let Some(field) = self.popup.as_ref().map(|p| p.field) else { return FormEvent::None };
+        let value = self.choices(field).get(n).map(|c| c.value.clone());
+        self.popup = None;
+        let Some(value) = value else { return FormEvent::None };
+        let field = &mut self.fields[field];
         match &mut field.kind {
             FieldKind::Select { options, selected } => {
                 *selected = options.iter().position(|c| c.value == value).unwrap_or(*selected);
@@ -310,6 +355,13 @@ impl Form {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if let Some(p) = self.popup.as_mut()
+            && let Some(q) = p.search.as_mut()
+        {
+            q.insert_str(text);
+            p.selected = 0;
+            return;
+        }
         if let Some(i) = self.fields.get_mut(self.focus).and_then(Field::input_mut) {
             i.insert_str(text);
             self.dirty = true;
@@ -399,6 +451,10 @@ impl Form {
             return FormEvent::None;
         }
 
+        if self.searching().is_some() {
+            return self.search_key(key);
+        }
+
         if let Some(p) = self.popup.as_ref() {
             let field = p.field;
             let typing = matches!(self.fields[field].kind, FieldKind::Combo { .. }) && self.mode == Mode::Insert;
@@ -424,6 +480,10 @@ impl Form {
                     KeyCode::Char('u') if ctrl => p.selected = p.selected.saturating_sub(5),
                     KeyCode::Char('g') if !typing => p.selected = 0,
                     KeyCode::Char('G') if !typing => p.selected = last,
+                    KeyCode::Char('/') if !typing => {
+                        p.search = Some(TextInput::default());
+                        p.selected = 0;
+                    }
                     KeyCode::Enter | KeyCode::Tab | KeyCode::Char(' ') if key.code != KeyCode::Char(' ') || !typing => {
                         let sel = p.selected;
                         let ev = self.choose(sel);
@@ -588,6 +648,10 @@ impl Form {
                     self.open_popup();
                     FormEvent::None
                 }
+                KeyCode::Char('/') => {
+                    self.open_search();
+                    FormEvent::None
+                }
                 _ => FormEvent::None,
             },
             FieldKind::Toggle(on) => match key.code {
@@ -606,10 +670,63 @@ impl Form {
         }
     }
 
+    /// Keys while a `/` search is typed: the list filters as it changes, Enter picks, Esc goes
+    /// back to the whole list.
+    fn search_key(&mut self, key: &KeyEvent) -> FormEvent {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(field) = self.popup.as_ref().map(|p| p.field) else { return FormEvent::None };
+        let last = self.choices(field).len().saturating_sub(1);
+        let down = key.code == KeyCode::Down || (ctrl && matches!(key.code, KeyCode::Char('j') | KeyCode::Char('n')));
+        let up = key.code == KeyCode::Up || (ctrl && matches!(key.code, KeyCode::Char('k') | KeyCode::Char('p')));
+        match key.code {
+            KeyCode::Enter | KeyCode::Tab => {
+                let sel = self.popup.as_ref().map_or(0, |p| p.selected);
+                let ev = self.choose(sel);
+                self.mode = Mode::Normal;
+                if key.code == KeyCode::Tab {
+                    self.step(1);
+                }
+                return ev;
+            }
+            KeyCode::Esc => {
+                // Back to the whole list, still on the option that was under the cursor.
+                let current = self.highlighted();
+                if let Some(p) = self.popup.as_mut() {
+                    p.search = None;
+                }
+                let pos = current.and_then(|v| self.choices(field).iter().position(|c| c.value == v));
+                if let Some(p) = self.popup.as_mut() {
+                    p.selected = pos.unwrap_or(0);
+                }
+                return FormEvent::None;
+            }
+            _ => {}
+        }
+        let Some(p) = self.popup.as_mut() else { return FormEvent::None };
+        if down {
+            p.selected = (p.selected + 1).min(last);
+        } else if up {
+            p.selected = p.selected.saturating_sub(1);
+        } else if key.code == KeyCode::PageDown {
+            p.selected = (p.selected + 8).min(last);
+        } else if key.code == KeyCode::PageUp {
+            p.selected = p.selected.saturating_sub(8);
+        } else if let Some(q) = p.search.as_mut()
+            && q.handle_key(key)
+        {
+            p.selected = 0;
+        }
+        FormEvent::None
+    }
+
     fn normal_text_key(&mut self, key: &KeyEvent, focus: usize) -> FormEvent {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let id = self.fields[focus].id;
         let is_combo = matches!(self.fields[focus].kind, FieldKind::Combo { .. });
+        if is_combo && key.code == KeyCode::Char('/') {
+            self.open_search();
+            return FormEvent::None;
+        }
         let Some(input) = self.fields[focus].input_mut() else { return FormEvent::None };
         match key.code {
             KeyCode::Enter if is_combo => {
@@ -691,6 +808,77 @@ mod tests {
                 Field::secret("pw", "Password", true),
             ],
         )
+    }
+
+    fn hosts_form() -> Form {
+        let hosts = ["MAT/Claro Chile/Master 1", "MAT/Claro Colombia/Master 1", "Lab/pve01", "Lab/nas"]
+            .iter()
+            .zip(["10.1.1.1", "10.2.2.2", "192.168.9.7", "192.168.9.5"])
+            .map(|(p, ip)| Choice::new(*p, *p, ip))
+            .collect();
+        Form::new("t", "Save", vec![Field::combo("host", "Host", "Lab/nas", hosts), Field::select("x", "X", vec![], "")])
+    }
+
+    fn type_keys(f: &mut Form, s: &str) {
+        for c in s.chars() {
+            f.handle_key(&key(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn slash_searches_a_list() {
+        let mut f = hosts_form();
+        f.handle_key(&key(KeyCode::Enter));
+        assert_eq!(f.choices(0).len(), 4, "an exact value lists everything");
+        f.handle_key(&key(KeyCode::Char('/')));
+        type_keys(&mut f, "chile");
+        let found: Vec<&str> = f.choices(0).iter().map(|c| c.value.as_str()).collect();
+        assert_eq!(found, ["MAT/Claro Chile/Master 1"]);
+        // j and k are part of the query while searching; Ctrl+j moves.
+        type_keys(&mut f, "jk");
+        assert!(f.choices(0).is_empty());
+        for _ in 0..2 {
+            f.handle_key(&key(KeyCode::Backspace));
+        }
+        assert_eq!(f.handle_key(&key(KeyCode::Enter)), FormEvent::Changed("host"));
+        assert_eq!(f.value("host"), "MAT/Claro Chile/Master 1");
+        assert!(f.popup.is_none());
+
+        // On the field itself, / opens the list searching; the detail (the address) matches too.
+        f.handle_key(&key(KeyCode::Char('/')));
+        type_keys(&mut f, "192.168.9.7");
+        assert_eq!(f.highlighted().as_deref(), Some("Lab/pve01"));
+        // Esc goes back to the whole list on the same option, a second Esc closes it.
+        f.handle_key(&key(KeyCode::Esc));
+        assert!(f.searching().is_none());
+        assert_eq!((f.choices(0).len(), f.highlighted().as_deref()), (4, Some("Lab/pve01")));
+        f.handle_key(&key(KeyCode::Esc));
+        assert!(f.popup.is_none());
+        assert_eq!(f.value("host"), "MAT/Claro Chile/Master 1", "nothing picked");
+
+        // Pasting goes into the search; a click picks among the matches.
+        f.handle_key(&key(KeyCode::Char('/')));
+        f.paste("colombia");
+        assert_eq!(f.choose(0), FormEvent::Changed("host"));
+        assert_eq!(f.value("host"), "MAT/Claro Colombia/Master 1");
+
+        // A list without options does not open.
+        f.handle_key(&key(KeyCode::Down));
+        f.handle_key(&key(KeyCode::Char('/')));
+        assert!(f.popup.is_none());
+    }
+
+    #[test]
+    fn slash_is_text_while_typing_a_combo() {
+        let mut f = hosts_form();
+        f.handle_key(&key(KeyCode::Char('S')));
+        type_keys(&mut f, "Lab/");
+        f.handle_key(&key(KeyCode::Enter));
+        assert_eq!(f.choices(0).len(), 2, "the typed text filters the suggestions");
+        f.handle_key(&key(KeyCode::Char('p')));
+        assert!(f.searching().is_none());
+        assert_eq!(f.value("host"), "Lab/p");
+        assert_eq!(f.highlighted().as_deref(), Some("Lab/pve01"));
     }
 
     #[test]
