@@ -302,7 +302,6 @@ impl HostStore {
 
     /// Adopts what another sshm instance (or a hand edit) changed in the file, keeping this
     /// instance's unsaved changes. Returns whether the host list changed; only a stat when nothing did.
-    #[allow(dead_code)]
     pub fn reload_if_changed(&mut self) -> Result<bool> {
         let fp = paths::fingerprint(&self.path);
         if fp.is_none() || fp == self.disk || fp == self.unreadable {

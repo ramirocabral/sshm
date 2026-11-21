@@ -87,8 +87,11 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
                 let r2 = field_row(f, inner, inner.y + 3, "Repeat", 12, u.field == 1);
                 cursor = u.confirm.render(r2, f.buffer_mut(), u.field == 1, Style::default()).or(cursor);
             }
-            if let Some(e) = &u.error {
-                text(f, inner.x, inner.y + if two { 5 } else { 4 }, e, inner.width, Style::default().fg(colors().error));
+            let status_y = inner.y + if two { 5 } else { 4 };
+            if u.busy.is_some() {
+                text(f, inner.x, status_y, if u.creating { "Creating the vault…" } else { "Unlocking…" }, inner.width, Style::default().fg(colors().muted));
+            } else if let Some(e) = &u.error {
+                text(f, inner.x, status_y, e, inner.width, Style::default().fg(colors().error));
             }
             hint(f, inner, "Enter confirms · Esc cancels");
             cursor

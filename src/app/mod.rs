@@ -3,6 +3,7 @@ pub mod dialogs;
 pub mod form;
 mod hosts;
 pub mod input;
+mod jobs;
 pub mod keymap;
 pub mod sftp;
 pub mod sidebar;
@@ -12,12 +13,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{Event as CEvent, EventStream};
 use futures::StreamExt;
 use portable_pty::CommandBuilder;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use zeroize::Zeroizing;
 
 use crate::secrets::{self, SecretKind, Vault};
 use crate::ssh::askpass::{self, AskPassRequest};
@@ -33,10 +35,8 @@ pub enum AppEvent {
     Input(CEvent),
     Pane(PaneId, PaneNotify),
     AskPass(AskPassRequest),
-    /// Ok(None): the source has nothing stored for the host.
-    SecretFetched { req: u64, result: Result<Option<String>, String> },
-    /// Outcome of a background job worth a toast.
-    Notice(Result<String, String>),
+    /// The result of background work, applied on the UI thread.
+    Apply(jobs::Apply),
     Sftp(u64, sftp::SftpEvent),
     Tick,
 }
@@ -124,13 +124,13 @@ pub struct App {
     pub askpass_sock: PathBuf,
     pub runtime_dir: PathBuf,
     pub owners: HashMap<String, Owner>,
-    pub pending_secrets: HashMap<u64, SecretPurpose>,
     pub layout: LayoutCache,
     pub truecolor: bool,
     pub quit: bool,
     pub dirty: bool,
     pub last_vault_use: Instant,
     pub mouse: input::MouseState,
+    vault_writer: jobs::VaultWriter,
     /// Expanded folders as last written to the state file.
     saved_expanded: HashSet<String>,
     state_path: PathBuf,
@@ -171,6 +171,7 @@ impl App {
     pub fn from_parts(parts: AppParts, tx: UnboundedSender<AppEvent>) -> Self {
         let AppParts { cfg, store, vault, state, state_path, askpass_sock, runtime_dir, truecolor } = parts;
         let leader = cfg.leader_key();
+        let vault_writer = jobs::VaultWriter::start(tx.clone());
         let mut sidebar = Sidebar::default();
         let mut saved_expanded = HashSet::new();
         if let Some(expanded) = state.expanded {
@@ -195,13 +196,13 @@ impl App {
             askpass_sock,
             runtime_dir,
             owners: HashMap::new(),
-            pending_secrets: HashMap::new(),
             layout: LayoutCache::default(),
             truecolor,
             quit: false,
             dirty: true,
             last_vault_use: Instant::now(),
             mouse: input::MouseState::default(),
+            vault_writer,
             saved_expanded,
             state_path,
             next_id: 1,
@@ -247,19 +248,7 @@ impl App {
             AppEvent::Input(ev) => self.handle_input(ev),
             AppEvent::Pane(id, n) => self.handle_pane_event(id, n),
             AppEvent::AskPass(req) => self.handle_askpass(req),
-            AppEvent::SecretFetched { req, result } => {
-                if let Some(purpose) = self.pending_secrets.remove(&req) {
-                    match result {
-                        Ok(v) => self.fulfill(purpose, v),
-                        Err(e) => {
-                            self.error(e);
-                            self.fulfill(purpose, None);
-                        }
-                    }
-                }
-            }
-            AppEvent::Notice(Ok(msg)) => self.info(msg),
-            AppEvent::Notice(Err(e)) => self.error(e),
+            AppEvent::Apply(f) => f(self),
             AppEvent::Sftp(tab, ev) => self.handle_sftp_event(tab, ev),
             AppEvent::Tick => {
                 if self.toast.as_ref().is_some_and(|t| t.1.elapsed() > Duration::from_secs(4)) {
@@ -273,6 +262,13 @@ impl App {
                     self.vault.lock();
                     self.info("Vault locked after inactivity");
                     self.dirty = true;
+                }
+                match self.store.reload_if_changed() {
+                    Ok(changed) => self.dirty |= changed,
+                    Err(e) => {
+                        self.error(format!("hosts.toml changed on disk and cannot be read: {e:#}"));
+                        self.dirty = true;
+                    }
                 }
             }
         }
@@ -598,23 +594,22 @@ impl App {
                 }
             }
             SecretSource::Keyring => {
-                let req = self.next_id();
-                self.pending_secrets.insert(req, purpose);
-                let (tx, host_id) = (self.tx.clone(), host_id.to_string());
-                tokio::task::spawn_blocking(move || {
-                    let result = secrets::keyring::get(&host_id, kind).map_err(|e| format!("{e:#}"));
-                    let _ = tx.send(AppEvent::SecretFetched { req, result });
-                });
+                let host_id = host_id.to_string();
+                self.spawn_job(move || secrets::keyring::get(&host_id, kind), |app, result| app.fetched(purpose, result));
             }
             external => {
-                let req = self.next_id();
-                self.pending_secrets.insert(req, purpose);
                 self.info(format!("Fetching from {}…", external.label()));
-                let tx = self.tx.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result = secrets::fetch_external(&external).map(Some).map_err(|e| format!("{e:#}"));
-                    let _ = tx.send(AppEvent::SecretFetched { req, result });
-                });
+                self.spawn_job(move || secrets::fetch_external(&external).map(Some), |app, result| app.fetched(purpose, result));
+            }
+        }
+    }
+
+    fn fetched(&mut self, purpose: SecretPurpose, result: Result<Option<String>>) {
+        match result {
+            Ok(v) => self.fulfill(purpose, v),
+            Err(e) => {
+                self.error(format!("{e:#}"));
+                self.fulfill(purpose, None);
             }
         }
     }
@@ -690,13 +685,11 @@ impl App {
             self.push_dialog(Dialog::Unlock(UnlockDialog::new(creating, then)));
             return;
         }
+        let stored = secrets.iter().any(|(_, v)| v.is_some());
         for (kind, v) in secrets {
             self.vault.set(host_id, kind, v);
         }
-        match self.vault.save() {
-            Ok(()) => self.info("Password saved to the vault"),
-            Err(e) => self.error(format!("Could not save the vault: {e:#}")),
-        }
+        self.save_vault(Some(if stored { "Password saved to the vault" } else { "Password removed from the vault" }));
     }
 
     fn uses_keyring(&self, host_id: &str, kind: SecretKind) -> bool {
@@ -707,23 +700,26 @@ impl App {
         })
     }
 
-    fn save_to_keyring(&mut self, host_id: &str, secrets: Vec<(SecretKind, Option<String>)>) {
+    /// What the keyring app shows for a host's secret.
+    pub(crate) fn keyring_label(&self, host_id: &str, kind: SecretKind) -> String {
         let path = self.store.get(host_id).map(|h| h.path()).unwrap_or_default();
-        let (tx, host_id) = (self.tx.clone(), host_id.to_string());
-        tokio::task::spawn_blocking(move || {
-            let stored = secrets.iter().any(|(_, v)| v.is_some());
-            let result = secrets
-                .into_iter()
-                .try_for_each(|(kind, value)| match value {
-                    Some(v) => {
-                        let what = if kind == SecretKind::RootPassword { "root password" } else { "password" };
-                        secrets::keyring::set(&host_id, kind, &format!("sshm: {path} ({what})"), &v)
-                    }
-                    None => secrets::keyring::clear(&host_id, kind),
-                })
-                .map(|()| if stored { "Password saved to the keyring" } else { "Password removed from the keyring" }.to_string())
-                .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(AppEvent::Notice(result));
+        let what = if kind == SecretKind::RootPassword { "root password" } else { "password" };
+        format!("sshm: {path} ({what})")
+    }
+
+    pub(crate) fn save_to_keyring(&mut self, host_id: &str, secrets: Vec<(SecretKind, Option<String>)>) {
+        let labels: Vec<String> = secrets.iter().map(|(kind, _)| self.keyring_label(host_id, *kind)).collect();
+        let host_id = host_id.to_string();
+        let stored = secrets.iter().any(|(_, v)| v.is_some());
+        let work = move || {
+            secrets.into_iter().zip(labels).try_for_each(|((kind, value), label)| match value {
+                Some(v) => secrets::keyring::set(&host_id, kind, &label, &v),
+                None => secrets::keyring::clear(&host_id, kind),
+            })
+        };
+        self.spawn_job(work, move |app, result| match result {
+            Ok(()) => app.info(if stored { "Password saved to the keyring" } else { "Password removed from the keyring" }),
+            Err(e) => app.error(format!("{e:#}")),
         });
     }
 
@@ -741,13 +737,10 @@ impl App {
         if jobs.is_empty() {
             return;
         }
-        let tx = self.tx.clone();
-        tokio::task::spawn_blocking(move || {
-            for (id, kind) in jobs {
-                if let Err(e) = secrets::keyring::clear(&id, kind) {
-                    let _ = tx.send(AppEvent::Notice(Err(format!("{e:#}"))));
-                    return;
-                }
+        let work = move || jobs.into_iter().try_for_each(|(id, kind)| secrets::keyring::clear(&id, kind));
+        self.spawn_job(work, |app, result| {
+            if let Err(e) = result {
+                app.error(format!("{e:#}"));
             }
         });
     }
@@ -780,15 +773,79 @@ impl App {
         }
     }
 
+    /// Enter in the unlock dialog: a new master password applies at once; unlocking runs scrypt in the background.
+    pub fn submit_unlock(&mut self, mut u: UnlockDialog) {
+        if u.changing {
+            match self.vault.set_passphrase(&u.input.value) {
+                Ok(()) => {
+                    self.last_vault_use = Instant::now();
+                    self.save_vault(Some("Master password changed"));
+                    let then = std::mem::replace(&mut u.then, AfterUnlock::Nothing);
+                    self.run_after_unlock(then);
+                }
+                Err(e) => {
+                    u.error = Some(format!("{e:#}"));
+                    self.dialogs.push_front(Dialog::Unlock(u));
+                }
+            }
+            return;
+        }
+        let req = self.next_id();
+        let path = self.vault.path().clone();
+        let pass = Zeroizing::new(u.input.value.clone());
+        u.busy = Some(req);
+        u.error = None;
+        self.dialogs.push_front(Dialog::Unlock(u));
+        self.spawn_job(move || Vault::open(&path, &pass), move |app, result| app.unlock_done(req, result));
+    }
+
+    fn unlock_done(&mut self, req: u64, result: Result<crate::secrets::vault::Opened>) {
+        let Some(pos) = self.dialogs.iter().position(|d| matches!(d, Dialog::Unlock(u) if u.busy == Some(req))) else { return };
+        let Some(Dialog::Unlock(mut u)) = self.dialogs.remove(pos) else { return };
+        match result {
+            Ok(opened) => {
+                self.vault.install(opened);
+                self.last_vault_use = Instant::now();
+                // Other prompts waiting for the vault go ahead too instead of asking again.
+                let mut waiting = vec![std::mem::replace(&mut u.then, AfterUnlock::Nothing)];
+                let mut rest = VecDeque::new();
+                for d in self.dialogs.drain(..) {
+                    match d {
+                        Dialog::Unlock(mut o) if !o.changing && o.busy.is_none() => waiting.push(std::mem::replace(&mut o.then, AfterUnlock::Nothing)),
+                        d => rest.push_back(d),
+                    }
+                }
+                self.dialogs = rest;
+                for then in waiting {
+                    self.run_after_unlock(then);
+                }
+            }
+            Err(e) => {
+                u.busy = None;
+                u.error = Some(format!("{e:#}"));
+                u.input.clear();
+                u.confirm.clear();
+                u.field = 0;
+                self.dialogs.insert(pos, Dialog::Unlock(u));
+            }
+        }
+    }
+
     // ---------- import / export ----------
 
-    pub fn run_import(&mut self, mut dlg: ImportForm) {
+    /// Reads the file in the background (a bundle costs a scrypt run), then merges on the UI thread.
+    pub fn run_import(&mut self, dlg: ImportForm) {
         use crate::import::{self, ImportOptions};
-        let (source, conflict) = (dlg.source(), dlg.conflict());
-        let f = &dlg.form;
-        let path = crate::paths::expand_tilde(&f.value("path"));
-        let opts = ImportOptions { passphrase: Some(f.raw("passphrase")).filter(|p| !p.is_empty()), ..ImportOptions::default() };
-        let report = match import::import(source, &path, &opts) {
+        let source = dlg.source();
+        let path = crate::paths::expand_tilde(&dlg.form.value("path"));
+        let opts = ImportOptions { passphrase: Some(dlg.form.raw("passphrase")).filter(|p| !p.is_empty()), ..ImportOptions::default() };
+        self.info("Importing…");
+        self.spawn_job(move || import::import(source, &path, &opts), move |app, result| app.import_read(dlg, result));
+    }
+
+    fn import_read(&mut self, mut dlg: ImportForm, result: Result<crate::import::ImportReport>) {
+        self.toast = None;
+        let report = match result {
             Ok(r) => r,
             Err(e) => {
                 dlg.form.error = Some(format!("{e:#}"));
@@ -796,6 +853,7 @@ impl App {
                 return;
             }
         };
+        let conflict = dlg.conflict();
         let has_secrets = report.hosts.iter().any(|h| h.has_secrets());
         if has_secrets && !self.vault.is_unlocked() {
             let creating = !self.vault.exists();
@@ -804,15 +862,14 @@ impl App {
         }
         let warnings = report.warnings.clone();
         let vault = if self.vault.is_unlocked() { Some(&mut self.vault) } else { None };
-        match import::merge(&mut self.store, vault, report, conflict) {
+        match crate::import::merge(&mut self.store, vault, report, conflict) {
             Ok(sum) => {
                 if let Err(e) = self.store.save() {
                     self.error(format!("Could not save hosts.toml: {e:#}"));
                 }
-                if sum.secrets > 0
-                    && let Err(e) = self.vault.save() {
-                        self.error(format!("Could not save the vault: {e:#}"));
-                    }
+                if sum.secrets > 0 {
+                    self.save_vault(None);
+                }
                 let mut lines = vec![
                     format!("Added: {}", sum.added),
                     format!("Updated: {}", sum.updated),
@@ -856,24 +913,36 @@ impl App {
             self.push_dialog(Dialog::Unlock(UnlockDialog::new(false, AfterUnlock::Export(dlg))));
             return;
         }
-        let vault = if self.vault.is_unlocked() { Some(&self.vault) } else { None };
+        let vault = self.vault.is_unlocked().then(|| self.vault.snapshot());
         let with_secrets = want_secrets && vault.is_some();
-        let pass = Some(pass).filter(|p| !p.is_empty());
-        let data = match import::export(&self.store, vault, format, with_secrets, pass.as_deref()) {
-            Ok(d) => d,
-            Err(e) => return fail(self, dlg, format!("{e:#}")),
-        };
+        let pass = Zeroizing::new(pass);
         let path = crate::paths::expand_tilde(&dlg.form.value("path"));
-        match crate::paths::write_private(&path, &data) {
-            Ok(()) => {
-                let mut lines = vec![format!("{} hosts exported to {}", self.store.hosts.len(), path.display())];
-                if with_secrets && format != ExportFormat::Bundle {
-                    lines.push("Warning: the file contains passwords in plain text.".into());
-                }
-                self.push_dialog(Dialog::Message { title: "Export finished".into(), lines });
+        let hosts = self.store.hosts.clone();
+        let work = {
+            let path = path.clone();
+            move || -> Result<usize> {
+                let mut store = HostStore::default();
+                store.hosts = hosts;
+                let pass = Some(pass.as_str()).filter(|p| !p.is_empty());
+                let data = import::export(&store, vault.as_ref(), format, with_secrets, pass)?;
+                crate::paths::write_private(&path, &data).with_context(|| format!("Could not write {}", path.display()))?;
+                Ok(store.hosts.len())
             }
-            Err(e) => fail(self, dlg, format!("Could not write {}: {e:#}", path.display())),
-        }
+        };
+        self.info("Exporting…");
+        self.spawn_job(work, move |app, result| {
+            app.toast = None;
+            match result {
+                Ok(n) => {
+                    let mut lines = vec![format!("{n} hosts exported to {}", path.display())];
+                    if with_secrets && format != ExportFormat::Bundle {
+                        lines.push("Warning: the file contains passwords in plain text.".into());
+                    }
+                    app.push_dialog(Dialog::Message { title: "Export finished".into(), lines });
+                }
+                Err(e) => fail(app, dlg, format!("{e:#}")),
+            }
+        });
     }
 }
 
@@ -963,6 +1032,7 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
     .await;
 
+    app.vault_writer.finish();
     crate::tui::leave()?;
     let _ = std::fs::remove_file(&sock);
     result
@@ -971,6 +1041,7 @@ pub async fn run(cfg: Config) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tokio::sync::mpsc::UnboundedReceiver;
 
     use super::*;
     use crate::import::test_support::TempDir;
@@ -982,6 +1053,12 @@ pub(crate) mod tests {
 
     /// An App over a scratch directory holding hosts given as (name, folder); no terminal involved.
     pub fn app_with_hosts(hosts: &[(&str, &str)]) -> (App, TempDir) {
+        let (app, dir, _rx) = app_with_events(hosts);
+        (app, dir)
+    }
+
+    /// Like `app_with_hosts`, keeping the receiver for what background work sends back.
+    pub fn app_with_events(hosts: &[(&str, &str)]) -> (App, TempDir, UnboundedReceiver<AppEvent>) {
         let dir = TempDir::new();
         let mut store = dir.store();
         for (name, folder) in hosts {
@@ -997,8 +1074,72 @@ pub(crate) mod tests {
             runtime_dir: dir.0.clone(),
             truecolor: false,
         };
-        let (tx, _rx) = unbounded_channel();
-        (App::from_parts(parts, tx), dir)
+        let (tx, rx) = unbounded_channel();
+        (App::from_parts(parts, tx), dir, rx)
+    }
+
+    /// Handles events until `done` holds.
+    async fn pump(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>, done: impl Fn(&App) -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while !done(app) {
+            let ev = tokio::time::timeout_at(deadline, rx.recv()).await.expect("timed out waiting for the app").expect("channel closed");
+            app.handle(ev);
+        }
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.handle(AppEvent::Input(CEvent::Key(key(KeyCode::Char(c)))));
+        }
+        app.handle(AppEvent::Input(CEvent::Key(key(KeyCode::Enter))));
+    }
+
+    fn vault_password(dir: &TempDir, pass: &str, host: &str) -> Option<String> {
+        let mut v = Vault::new(dir.0.join("vault.age"));
+        v.unlock(pass).unwrap();
+        v.get(host, SecretKind::Password)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unlock_and_saves_run_off_the_ui_thread() {
+        let (mut app, dir, mut rx) = app_with_events(&[("web1", "")]);
+        let id = app.store.hosts[0].id.clone();
+        Vault::new(dir.0.join("vault.age")).unlock("m").unwrap();
+
+        app.push_dialog(Dialog::Unlock(UnlockDialog::new(false, AfterUnlock::Nothing)));
+        type_text(&mut app, "wrong");
+        assert!(matches!(app.dialogs.front(), Some(Dialog::Unlock(u)) if u.busy.is_some()));
+        pump(&mut app, &mut rx, |a| matches!(a.dialogs.front(), Some(Dialog::Unlock(u)) if u.busy.is_none())).await;
+        assert!(matches!(app.dialogs.front(), Some(Dialog::Unlock(u)) if u.error.as_deref() == Some("wrong master password")));
+        assert!(!app.vault.is_unlocked());
+
+        // A second prompt waiting for the vault goes ahead with the first unlock.
+        let save = AfterUnlock::SaveSecrets { host_id: id.clone(), secrets: vec![(SecretKind::Password, Some("p4ss".into()))] };
+        app.push_dialog(Dialog::Unlock(UnlockDialog::new(false, save)));
+        type_text(&mut app, "m");
+        assert!(!app.vault.is_unlocked());
+        pump(&mut app, &mut rx, |a| a.vault.is_unlocked() && a.dialogs.is_empty()).await;
+        pump(&mut app, &mut rx, |a| a.toast.as_ref().is_some_and(|t| t.0 == "Password saved to the vault")).await;
+        assert_eq!(vault_password(&dir, "m", &id).as_deref(), Some("p4ss"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_password_whose_source_changes_is_not_left_behind() {
+        let (mut app, dir, mut rx) = app_with_events(&[("web1", "")]);
+        app.store.hosts[0].password = SecretSource::Vault;
+        let host = app.store.hosts[0].clone();
+        app.vault.unlock("m").unwrap();
+        app.vault.set(&host.id, SecretKind::Password, Some("old".into()));
+        app.vault.save().unwrap();
+
+        let ctx = HostFormContext { folders: vec![], jump_hosts: vec![], keys: vec![], saved_password: true, saved_root: false, vault_locked: false };
+        let mut form = HostForm::new(&host, true, ctx);
+        form.form.set_value("pw_source", "none");
+        form.on_change("pw_source");
+        app.save_host_form(Box::new(form));
+        assert_eq!(app.store.get(&host.id).unwrap().password, SecretSource::None);
+        assert_eq!(app.vault.get(&host.id, SecretKind::Password), None);
+        pump(&mut app, &mut rx, |_| vault_password(&dir, "m", &host.id).is_none()).await;
     }
 
     #[test]

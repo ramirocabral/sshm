@@ -39,16 +39,79 @@ impl App {
             Ok(host) => {
                 let changes = form.secret_changes();
                 let id = host.id.clone();
-                self.store.upsert(host);
+                let old = self.store.get(&id).cloned();
+                self.store.upsert(host.clone());
                 self.persist_hosts();
                 self.sidebar.select_host(&self.store, &id);
                 self.info(if form.editing { "Host updated" } else { "Host created" });
+                let typed: Vec<SecretKind> = changes.iter().map(|(k, _)| *k).collect();
                 self.save_secrets(&id, changes);
+                if let Some(old) = old {
+                    self.retire_old_secrets(&old, &host, &typed);
+                }
             }
             Err(e) => {
                 form.form.error = Some(e);
                 self.dialogs.push_front(Dialog::HostForm(form));
             }
+        }
+    }
+
+    /// A password whose source changed moves along when it went between the vault and the keyring
+    /// and nothing new was typed; otherwise the old copy is deleted.
+    fn retire_old_secrets(&mut self, old: &Host, new: &Host, typed: &[SecretKind]) {
+        let mut vault_changed = false;
+        for kind in [SecretKind::Password, SecretKind::RootPassword] {
+            let source = |h: &Host| if kind == SecretKind::Password { h.password.clone() } else { h.root_password.clone() };
+            let (from, to) = (source(old), source(new));
+            if from == to {
+                continue;
+            }
+            let carry = !typed.contains(&kind);
+            match from {
+                SecretSource::Vault if self.vault.is_unlocked() => {
+                    let Some(value) = self.vault.get(&old.id, kind) else { continue };
+                    if !(carry && to == SecretSource::Keyring) {
+                        self.vault.set(&old.id, kind, None);
+                        vault_changed = true;
+                        continue;
+                    }
+                    // The vault copy goes only once the keyring has it.
+                    let (id, label) = (new.id.clone(), self.keyring_label(&new.id, kind));
+                    let store = {
+                        let id = id.clone();
+                        move || crate::secrets::keyring::set(&id, kind, &label, &value)
+                    };
+                    self.spawn_job(store, move |app, result| match result {
+                        Ok(()) if app.vault.is_unlocked() => {
+                            app.vault.set(&id, kind, None);
+                            app.save_vault(Some("Password moved to the keyring"));
+                        }
+                        Ok(()) => app.info("Password copied to the keyring"),
+                        Err(e) => app.error(format!("{e:#}")),
+                    });
+                }
+                SecretSource::Keyring => {
+                    let id = old.id.clone();
+                    let into_vault = carry && to == SecretSource::Vault;
+                    let fetch = move || if into_vault { crate::secrets::keyring::get(&id, kind) } else { Ok(None) };
+                    let id = old.id.clone();
+                    self.spawn_job(fetch, move |app, value| match value {
+                        Ok(Some(v)) if app.vault.is_unlocked() => {
+                            app.save_secrets(&id, vec![(kind, Some(v))]);
+                            app.save_to_keyring(&id, vec![(kind, None)]);
+                        }
+                        // The vault is locked: it asks to unlock, and the keyring keeps its copy meanwhile.
+                        Ok(Some(v)) => app.save_secrets(&id, vec![(kind, Some(v))]),
+                        Ok(None) => app.save_to_keyring(&id, vec![(kind, None)]),
+                        Err(e) => app.error(format!("{e:#}")),
+                    });
+                }
+                _ => {}
+            }
+        }
+        if vault_changed {
+            self.save_vault(None);
         }
     }
 
@@ -94,9 +157,7 @@ impl App {
         self.persist_hosts();
         if self.vault.is_unlocked() {
             ids.iter().for_each(|id| self.vault.remove(id));
-            if let Err(e) = self.vault.save() {
-                self.error(format!("Could not save the vault: {e:#}"));
-            }
+            self.save_vault(None);
         }
         self.info(if ids.len() == 1 { "Host deleted".to_string() } else { format!("{} hosts deleted", ids.len()) });
     }

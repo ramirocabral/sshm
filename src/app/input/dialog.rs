@@ -1,4 +1,3 @@
-use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -39,6 +38,9 @@ impl App {
             },
             Dialog::Unlock(mut u) => {
                 let two_fields = u.creating || u.changing;
+                if u.busy.is_some() && key.code != KeyCode::Esc {
+                    return keep(self, Dialog::Unlock(u));
+                }
                 match key.code {
                     KeyCode::Esc => {
                         let then = std::mem::replace(&mut u.then, AfterUnlock::Nothing);
@@ -60,24 +62,7 @@ impl App {
                             keep(self, Dialog::Unlock(u));
                             return;
                         }
-                        let result = if u.changing { self.vault.change_passphrase(&u.input.value) } else { self.vault.unlock(&u.input.value) };
-                        match result {
-                            Ok(()) => {
-                                self.last_vault_use = Instant::now();
-                                if u.changing {
-                                    self.info("Master password changed");
-                                }
-                                let then = std::mem::replace(&mut u.then, AfterUnlock::Nothing);
-                                self.run_after_unlock(then);
-                            }
-                            Err(e) => {
-                                u.error = Some(format!("{e:#}"));
-                                u.input.clear();
-                                u.confirm.clear();
-                                u.field = 0;
-                                keep(self, Dialog::Unlock(u));
-                            }
-                        }
+                        self.submit_unlock(u);
                     }
                     _ => {
                         let input = if u.field == 0 { &mut u.input } else { &mut u.confirm };

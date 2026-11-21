@@ -269,7 +269,8 @@ impl Vault {
         disk.locked = true;
     }
 
-    pub fn change_passphrase(&mut self, new: &str) -> Result<()> {
+    /// Changes the master password; it takes effect with the next save.
+    pub fn set_passphrase(&mut self, new: &str) -> Result<()> {
         if !self.is_unlocked() {
             bail!("the vault is locked");
         }
@@ -277,7 +278,19 @@ impl Vault {
             bail!("the master password cannot be empty");
         }
         self.passphrase = Some(SecretString::from(new.to_string()));
-        self.save()
+        Ok(())
+    }
+
+    /// A detached copy of the unlocked entries, for work done off the UI thread (e.g. an export).
+    pub fn snapshot(&self) -> Vault {
+        Vault {
+            path: self.path.clone(),
+            passphrase: self.passphrase.clone(),
+            data: self.data.clone(),
+            disk: Arc::new(Mutex::new(DiskState::default())),
+            next_seq: 0,
+            exists: Cell::new(None),
+        }
     }
 
     /// Snapshots the vault for writing off the UI thread (`SaveJob::run`, then `apply_saved`).
@@ -501,7 +514,8 @@ mod tests {
         let mut a = reopen(&path, "m");
         let mut b = reopen(&path, "m");
         a.set("h", SecretKind::Password, Some("a".into()));
-        a.change_passphrase("new").unwrap();
+        a.set_passphrase("new").unwrap();
+        a.save().unwrap();
         b.set("x", SecretKind::Password, Some("b".into()));
         let err = b.save().unwrap_err();
         assert!(err.to_string().contains("different master password"), "{err}");

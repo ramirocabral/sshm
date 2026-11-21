@@ -81,11 +81,13 @@ pub struct UnlockDialog {
     pub field: usize,
     pub error: Option<String>,
     pub then: AfterUnlock,
+    /// The background unlock in progress, if any.
+    pub busy: Option<u64>,
 }
 
 impl UnlockDialog {
     pub fn new(creating: bool, then: AfterUnlock) -> Self {
-        UnlockDialog { input: TextInput::masked(), confirm: TextInput::masked(), creating, changing: false, field: 0, error: None, then }
+        UnlockDialog { input: TextInput::masked(), confirm: TextInput::masked(), creating, changing: false, field: 0, error: None, then, busy: None }
     }
 }
 
