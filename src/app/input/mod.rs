@@ -98,9 +98,10 @@ impl App {
         }
         match self.focus {
             Focus::Sidebar => self.sidebar_key(key),
-            Focus::Main => match self.tabs.get(self.active).map(|t| matches!(t.kind, TabKind::Sftp(_))) {
-                Some(true) => self.sftp_key(key),
-                Some(false) => self.pane_key(key),
+            Focus::Main => match self.tabs.get(self.active).map(|t| &t.kind) {
+                Some(TabKind::Sftp(_)) => self.sftp_key(key),
+                Some(TabKind::Tunnels(_)) => self.tunnels_key(key),
+                Some(TabKind::Terms(_)) => self.pane_key(key),
                 None => self.focus = Focus::Sidebar,
             },
         }
@@ -178,7 +179,7 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char(':')));
         let Some(Dialog::Palette(p)) = app.dialogs.front() else { panic!("palette expected") };
-        assert_eq!(p.matches().len(), 13);
+        assert_eq!(p.matches().len(), super::super::keymap::PALETTE.len());
         for c in "locations".chars() {
             app.handle_key(key(KeyCode::Char(c)));
         }

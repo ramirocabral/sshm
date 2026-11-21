@@ -224,6 +224,7 @@ impl App {
             Dialog::Export(f) => self.run_export(f),
             Dialog::Move(f) => self.run_move(f),
             Dialog::Theme(f) => self.save_theme(f),
+            Dialog::Tunnel(f) => self.save_tunnel_form(f),
             other => self.dialogs.push_front(other),
         }
     }
@@ -238,6 +239,7 @@ impl App {
             ConfirmAction::Quit => self.quit = true,
             ConfirmAction::SftpDelete { tab, remote, paths } => self.sftp_delete(tab, remote, paths),
             ConfirmAction::SftpOverwrite { tab, upload, sources } => self.sftp_transfer(tab, upload, sources),
+            ConfirmAction::DeleteTunnel { host, tunnel } => self.delete_tunnel(&host, &tunnel),
         }
     }
 

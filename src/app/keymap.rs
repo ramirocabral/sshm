@@ -68,11 +68,20 @@ pub enum Action {
     Palette,
     Paths,
     Quit,
+    Tunnels,
+    TunnelNew,
+    TunnelToggle,
+    TunnelEdit,
+    TunnelDelete,
+    TunnelRestart,
+    TunnelCopy,
 }
 
 /// What the command palette offers, in order.
-pub const PALETTE: [Action; 13] = [
+pub const PALETTE: [Action; 15] = [
     Action::NewHost,
+    Action::Tunnels,
+    Action::TunnelNew,
     Action::LocalShell,
     Action::ImportSshConfig,
     Action::Import,
@@ -92,6 +101,8 @@ impl Action {
     pub fn title(self) -> &'static str {
         match self {
             Action::NewHost => "New host",
+            Action::Tunnels => "Tunnels (port forwarding)",
+            Action::TunnelNew => "New tunnel…",
             Action::LocalShell => "Open a local shell",
             Action::ImportSshConfig => "Import ~/.ssh/config",
             Action::Import => "Import from file… (JSON, CSV, bundle, MobaXterm, Ásbrú, Remmina)",
@@ -121,6 +132,8 @@ pub enum Ctx {
     Hosts,
     /// Visual selection in the host list.
     Visual,
+    /// The tunnels tab.
+    Tunnels,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -272,6 +285,7 @@ pub static BINDINGS: LazyLock<Vec<Binding>> = LazyLock::new(|| {
         bind(Leader, &[ch('d')], A::Duplicate, "duplicate the session into this tab (grid)").short("duplicate"),
         bind(Leader, &[ch('t')], A::LocalShell, "local shell in a new tab"),
         bind(Leader, &[ch('s')], A::Sftp, "SFTP to the current host").short("sftp"),
+        bind(Leader, &[ch('T')], A::Tunnels, "tunnels (port forwarding)"),
         bind(Leader, &[ch('b')], A::ToggleBroadcast, "broadcast: type into every pane of the tab").short("broadcast"),
         bind(Leader, &[ch('x')], A::ToggleExclude, "exclude/include the pane in broadcast").short("exclude"),
         bind(Leader, &[ch('p')], A::TypePassword, "type the host password (sudo, etc.)").short("password"),
@@ -309,6 +323,7 @@ pub static BINDINGS: LazyLock<Vec<Binding>> = LazyLock::new(|| {
             .welcome(),
         bind(Hosts, &[ch('o')], A::ActivateHere, "open in the current tab").short("add to tab").welcome(),
         bind(Hosts, &[ch('s')], A::Sftp, "SFTP").short("sftp").welcome(),
+        bind(Hosts, &[ch('T')], A::Tunnels, "tunnels (port forwarding) of the host").short("tunnels").welcome(),
         bind(Hosts, &[ch('n')], A::NewHost, "new / edit (on a folder: rename) / duplicate / delete host")
             .help_keys("n / e / c / d")
             .short("host")
@@ -336,6 +351,19 @@ pub static BINDINGS: LazyLock<Vec<Binding>> = LazyLock::new(|| {
         bind(Visual, &[ch('m')], A::MoveHosts, "move it to another folder").short("move"),
         bind(Visual, &[ch('d'), code(KeyCode::Delete)], A::DeleteHosts, "delete it").short("delete"),
         bind(Visual, &[code(KeyCode::Esc), ch('v'), ch('V'), ch('q')], A::ExitVisual, "cancel").short("cancel"),
+        bind(Tunnels, &[code(KeyCode::Enter), ch(' ')], A::TunnelToggle, "turn the tunnel on/off (on a host: all of its tunnels)")
+            .short("on/off"),
+        bind(Tunnels, &[ch('n')], A::TunnelNew, "new / edit / delete tunnel (e on a host edits the host)")
+            .help_keys("n / e / d")
+            .short("tunnel"),
+        bind(Tunnels, &[ch('e')], A::TunnelEdit, "").short("tunnel"),
+        bind(Tunnels, &[ch('d'), code(KeyCode::Delete)], A::TunnelDelete, "").short("tunnel"),
+        bind(Tunnels, &[ch('r')], A::TunnelRestart, "reconnect the host and restart its tunnels").short("reconnect"),
+        bind(Tunnels, &[ch('y')], A::TunnelCopy, "copy the address to connect to, e.g. localhost:5432").short("copy"),
+        bind(Tunnels, &[code(KeyCode::Tab)], A::ToggleFocus, "go to the host list"),
+        bind(Tunnels, &[ch('?')], A::Help, "help").short("help"),
+        bind(Tunnels, &[ch(':')], A::Palette, "command palette"),
+        bind(Tunnels, &[ch('q')], A::Close, "close the tab (the tunnels keep running)").short("close"),
     ]
 });
 
@@ -443,6 +471,8 @@ mod tests {
         let h = hints(Ctx::Leader, &l);
         assert!(h.contains("p/P password") && h.contains("w/W close pane/tab"));
         assert!(hints(Ctx::Hosts, &l).contains("n/e/d host"));
+        assert!(hints(Ctx::Tunnels, &l).starts_with("Enter on/off · n/e/d tunnel · r reconnect"));
+        assert_eq!(keys_for(Action::Tunnels, &l), "T · Ctrl+Space T");
         assert_eq!(keys_for(Action::NewHost, &l), "n · Ctrl+Space n");
         assert_eq!(keys_for(Action::LockVault, &l), "");
         assert!(PALETTE.iter().all(|a| !a.title().is_empty()));

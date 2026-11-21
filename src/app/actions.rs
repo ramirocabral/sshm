@@ -155,6 +155,13 @@ impl App {
             Action::Palette => self.push_dialog(Dialog::Palette(PaletteDialog::new())),
             Action::Paths => self.show_paths(),
             Action::Quit => self.request_quit(),
+            Action::Tunnels => self.open_tunnels(),
+            Action::TunnelNew
+            | Action::TunnelToggle
+            | Action::TunnelEdit
+            | Action::TunnelDelete
+            | Action::TunnelRestart
+            | Action::TunnelCopy => self.tunnel_action(action),
         }
     }
 
@@ -239,6 +246,9 @@ impl App {
             if let Some(TabKind::Sftp(v)) = self.tabs.get(self.active).map(|t| &t.kind) {
                 return Some(v.host_id.clone());
             }
+            if let Some((h, _)) = self.tunnel_selection() {
+                return Some(h);
+            }
         }
         self.selected_host()
     }
@@ -287,7 +297,7 @@ impl App {
 
     pub(crate) fn close_current(&mut self) {
         match self.tabs.get(self.active).map(|t| &t.kind) {
-            Some(TabKind::Sftp(_)) => self.remove_tab(self.active),
+            Some(TabKind::Sftp(_) | TabKind::Tunnels(_)) => self.remove_tab(self.active),
             Some(TabKind::Terms(_)) => {
                 let Some(id) = self.focused_pane_id() else { return };
                 let Some(p) = self.panes.get(&id) else { return };
@@ -307,13 +317,19 @@ impl App {
     }
 
     pub fn request_quit(&mut self) {
-        let n = self.running_sessions();
-        if n == 0 {
+        let count = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+        let open: Vec<String> = [(self.running_sessions(), "session"), (self.tunnels.running(), "tunnel")]
+            .into_iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, what)| count(n, what))
+            .collect();
+        if open.is_empty() {
             self.quit = true;
         } else {
+            let verb = if open.len() == 1 && open[0].starts_with("1 ") { "is" } else { "are" };
             self.push_dialog(Dialog::Confirm(ConfirmDialog {
                 title: "Quit".into(),
-                body: format!("{n} sessions are still open. Quit anyway?"),
+                body: format!("{} {verb} still open. Quit anyway?", open.join(" and ")),
                 action: Some(ConfirmAction::Quit),
             }));
         }

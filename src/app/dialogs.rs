@@ -7,7 +7,7 @@ use super::widgets::TextInput;
 use crate::import::{Conflict, ExportFormat, Source};
 use crate::secrets::SecretKind;
 use crate::ssh::command::PromptKind;
-use crate::store::hosts::{Host, SecretSource, normalize_folder, subpath};
+use crate::store::hosts::{Host, SecretSource, Tunnel, TunnelKind, TunnelStart, normalize_folder, subpath};
 use crate::term::pane::PaneId;
 
 pub enum Dialog {
@@ -23,6 +23,7 @@ pub enum Dialog {
     Export(ExportForm),
     Move(MoveForm),
     Theme(ThemeForm),
+    Tunnel(Box<TunnelForm>),
 }
 
 impl Dialog {
@@ -34,6 +35,7 @@ impl Dialog {
             Dialog::Export(d) => Some(&mut d.form),
             Dialog::Move(d) => Some(&mut d.form),
             Dialog::Theme(d) => Some(&mut d.form),
+            Dialog::Tunnel(d) => Some(&mut d.form),
             _ => None,
         }
     }
@@ -44,6 +46,7 @@ impl Dialog {
             Dialog::HostForm(d) => d.on_change(id),
             Dialog::Import(d) => d.on_change(id),
             Dialog::Export(d) => d.on_change(id),
+            Dialog::Tunnel(d) => d.on_change(id),
             _ => {}
         }
     }
@@ -148,6 +151,7 @@ pub enum ConfirmAction {
     Quit,
     SftpDelete { tab: u64, remote: bool, paths: Vec<String> },
     SftpOverwrite { tab: u64, upload: bool, sources: Vec<String> },
+    DeleteTunnel { host: String, tunnel: String },
 }
 
 pub struct ConfirmDialog {
@@ -383,6 +387,8 @@ pub struct HostForm {
     pub form: Form,
     pub id: String,
     pub editing: bool,
+    /// Edited in the tunnels tab, not here; kept as they are.
+    tunnels: Vec<Tunnel>,
 }
 
 fn source_choices() -> Vec<Choice> {
@@ -499,7 +505,7 @@ impl HostForm {
             Field::text("notes", "Notes", host.notes.clone()),
         ]);
         let title = if editing { format!("Edit host · {}", host.name) } else { "New host".to_string() };
-        let mut f = HostForm { form: Form::new(title, "Save", fields), id: host.id.clone(), editing };
+        let mut f = HostForm { form: Form::new(title, "Save", fields), id: host.id.clone(), editing, tunnels: host.tunnels.clone() };
         if !editing {
             f.form.mode = Mode::Insert;
         }
@@ -582,6 +588,7 @@ impl HostForm {
             auto_sudo: f.toggled("auto_sudo"),
             on_connect: opt("on_connect"),
             ssh_args,
+            tunnels: self.tunnels.clone(),
         })
     }
 
@@ -604,6 +611,136 @@ impl HostForm {
             }
         }
         out
+    }
+}
+
+/// New or edited tunnel. `host_id` is where an edited tunnel lives now; the Host field can move it.
+pub struct TunnelForm {
+    pub form: Form,
+    pub id: String,
+    pub host_id: String,
+    pub editing: bool,
+}
+
+fn port_value(v: &str, what: &str) -> Result<u16, String> {
+    if v.is_empty() {
+        return Err(format!("{what} is required"));
+    }
+    v.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| format!("{what}: invalid port {v}"))
+}
+
+impl TunnelForm {
+    /// `hosts`: every host as a choice whose value is its path.
+    pub fn new(tunnel: &Tunnel, host_id: &str, host_path: &str, hosts: Vec<Choice>, editing: bool) -> Self {
+        let port = |p: u16| if p == 0 { String::new() } else { p.to_string() };
+        let kinds = vec![
+            Choice::new(TunnelKind::Local.value(), "Local (-L)", "a port here reaches what the server sees"),
+            Choice::new(TunnelKind::Remote.value(), "Remote (-R)", "a port on the server reaches what this machine sees"),
+            Choice::new(TunnelKind::Dynamic.value(), "SOCKS proxy (-D)", "traffic from your apps leaves through the server"),
+        ];
+        let starts = vec![
+            Choice::new(TunnelStart::Manual.value(), "When I turn it on", "Enter in the tunnels tab"),
+            Choice::new(TunnelStart::Launch.value(), "When sshm starts", "and it stays on until you turn it off"),
+            Choice::new(TunnelStart::Connect.value(), "With a session", "when you open a session to this host"),
+        ];
+        let fields = vec![
+            Field::text("name", "Name", tunnel.name.clone())
+                .placeholder("optional, e.g. postgres")
+                .hint("How the tunnel shows up in the list"),
+            Field::combo("host", "Through host", host_path, hosts)
+                .placeholder("required")
+                .hint("The SSH server the tunnel goes through. Enter lists your hosts"),
+            Field::select("kind", "Type", kinds, tunnel.kind.value()),
+            Field::text("bind_port", "Local port", port(tunnel.bind_port)).placeholder("required"),
+            Field::text("dest_host", "Remote host", tunnel.dest_host.clone()).placeholder("localhost"),
+            Field::text("dest_port", "Remote port", port(tunnel.dest_port)).placeholder("required"),
+            Field::text("bind_address", "Listen on", tunnel.bind_address.clone()).placeholder("localhost"),
+            Field::select("start", "Start", starts, tunnel.start.value()).hint("A tunnel keeps running until you turn it off or quit sshm"),
+        ];
+        let title = if editing { format!("Edit tunnel · {}", tunnel.title()) } else { "New tunnel".to_string() };
+        let mut f = TunnelForm { form: Form::new(title, "Save", fields), id: tunnel.id.clone(), host_id: host_id.to_string(), editing };
+        if !editing {
+            f.form.focus = f.form.fields.iter().position(|x| x.id == "bind_port").unwrap_or(0);
+            f.form.mode = Mode::Insert;
+        }
+        f.sync();
+        f
+    }
+
+    pub fn kind(&self) -> TunnelKind {
+        TunnelKind::parse(&self.form.value("kind")).unwrap_or_default()
+    }
+
+    pub fn on_change(&mut self, _id: &str) {
+        self.sync();
+    }
+
+    /// Labels and hints follow the type: what is "here" and what is "there" swaps for remote tunnels.
+    fn sync(&mut self) {
+        let kind = self.kind();
+        let (port, port_hint, host, host_hint, dport, dport_hint, bind_hint) = match kind {
+            TunnelKind::Local => (
+                "Local port",
+                "Port opened on this machine; connect to localhost:PORT to use the tunnel",
+                "Remote host",
+                "As the server sees it: localhost is the server itself, or a host only it can reach",
+                "Remote port",
+                "Port on that host, e.g. 5432 for PostgreSQL",
+                "Address on this machine; 0.0.0.0 shares the port with your network",
+            ),
+            TunnelKind::Remote => (
+                "Server port",
+                "Port opened on the server; connections to it come back to this machine",
+                "Local host",
+                "As this machine sees it: localhost is this machine",
+                "Local port",
+                "Port on that host, e.g. 3000 for a dev server running here",
+                "Address on the server; anything but localhost needs GatewayPorts in its sshd",
+            ),
+            TunnelKind::Dynamic => (
+                "SOCKS port",
+                "Point apps at socks5://localhost:PORT and their traffic leaves through the server",
+                "",
+                "",
+                "",
+                "",
+                "Address on this machine; 0.0.0.0 shares the proxy with your network",
+            ),
+        };
+        let f = &mut self.form;
+        f.field_mut("bind_port").label = port;
+        f.field_mut("bind_port").hint = port_hint.into();
+        f.field_mut("dest_host").label = host;
+        f.field_mut("dest_host").hint = host_hint.into();
+        f.field_mut("dest_port").label = dport;
+        f.field_mut("dest_port").hint = dport_hint.into();
+        f.field_mut("bind_address").hint = bind_hint.into();
+        let socks = kind == TunnelKind::Dynamic;
+        f.set_visible("dest_host", !socks);
+        f.set_visible("dest_port", !socks);
+    }
+
+    /// The host path typed or picked in the Host field.
+    pub fn host_path(&self) -> String {
+        self.form.value("host")
+    }
+
+    pub fn to_tunnel(&self) -> Result<Tunnel, String> {
+        let f = &self.form;
+        let kind = self.kind();
+        let socks = kind == TunnelKind::Dynamic;
+        let t = Tunnel {
+            id: self.id.clone(),
+            name: f.value("name"),
+            kind,
+            bind_address: f.value("bind_address"),
+            bind_port: port_value(&f.value("bind_port"), f.field("bind_port").label)?,
+            dest_host: if socks { String::new() } else { f.value("dest_host") },
+            dest_port: if socks { 0 } else { port_value(&f.value("dest_port"), f.field("dest_port").label)? },
+            start: TunnelStart::parse(&f.value("start")).unwrap_or_default(),
+        };
+        t.validate()?;
+        Ok(t)
     }
 }
 
@@ -670,6 +807,52 @@ mod tests {
         assert_eq!(form.to_host().unwrap().ssh_args, host.ssh_args);
         form.form.set_value("ssh_args", "-o \"ProxyCommand=nc %h %p");
         assert!(form.to_host().unwrap_err().contains("quote"));
+    }
+
+    #[test]
+    fn host_form_keeps_the_tunnels() {
+        let host = Host { host: "b".into(), tunnels: vec![Tunnel { bind_port: 1080, ..Tunnel::default() }], ..Host::default() };
+        assert_eq!(HostForm::new(&host, true, ctx()).to_host().unwrap().tunnels, host.tunnels);
+    }
+
+    #[test]
+    fn tunnel_form_roundtrip() {
+        let t = Tunnel {
+            name: "pg".into(),
+            kind: TunnelKind::Local,
+            bind_port: 15432,
+            dest_host: "db".into(),
+            dest_port: 5432,
+            start: TunnelStart::Launch,
+            ..Tunnel::default()
+        };
+        let hosts = vec![Choice::new("lab/bastion", "lab/bastion", "me@b")];
+        let mut form = TunnelForm::new(&t, "h1", "lab/bastion", hosts, true);
+        assert_eq!(form.to_tunnel().unwrap(), t);
+        assert_eq!(form.host_path(), "lab/bastion");
+        assert_eq!(form.form.field("bind_port").label, "Local port");
+
+        form.form.set_value("kind", "remote");
+        form.on_change("kind");
+        assert_eq!(form.form.field("bind_port").label, "Server port");
+        assert_eq!(form.to_tunnel().unwrap().forward_args(), ["-R", "15432:db:5432"]);
+
+        form.form.set_value("kind", "dynamic");
+        form.on_change("kind");
+        assert!(!form.form.field("dest_port").visible);
+        let socks = form.to_tunnel().unwrap();
+        assert_eq!((socks.dest_host.as_str(), socks.dest_port), ("", 0));
+
+        form.form.set_value("bind_port", "70000");
+        assert!(form.to_tunnel().unwrap_err().contains("invalid port"));
+        form.form.set_value("kind", "local");
+        form.form.set_value("bind_port", "8080");
+        form.form.set_value("dest_port", "");
+        assert!(form.to_tunnel().unwrap_err().contains("required"));
+
+        let new = TunnelForm::new(&Tunnel::default(), "h1", "lab/bastion", vec![], false);
+        assert_eq!(new.form.focused_field().map(|f| f.id), Some("bind_port"));
+        assert_eq!(new.form.mode, Mode::Insert);
     }
 
     #[test]

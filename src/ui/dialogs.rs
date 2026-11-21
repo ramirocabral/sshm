@@ -164,6 +164,7 @@ pub fn draw(f: &mut Frame, app: &mut App, d: &Dialog, area: Rect) -> Option<Posi
         Dialog::Export(d) => draw_form(f, app, &d.form, area, 90),
         Dialog::Move(d) => draw_form(f, app, &d.form, area, 80),
         Dialog::Theme(d) => draw_form(f, app, &d.form, area, 80),
+        Dialog::Tunnel(d) => draw_form(f, app, &d.form, area, 96),
         Dialog::Help(h) => {
             let rect = centered(area, 104, area.height.saturating_sub(4));
             let inner = frame(f, rect, "Help", colors().accent);
@@ -314,6 +315,14 @@ pub fn help_entries(app: &App) -> Vec<HelpLine> {
     out.extend(bound(Ctx::Hosts, ""));
     out.extend([HelpLine::Blank, head("Visual selection (v / V in the host list)")]);
     out.extend(bound(Ctx::Visual, ""));
+    out.extend([HelpLine::Blank, head("Tunnels tab (T in the host list)")]);
+    out.extend(bound(Ctx::Tunnels, ""));
+    out.extend([
+        HelpLine::Text("  Local: a port on this machine reaches a host:port as the server sees it (a database behind it).".into()),
+        HelpLine::Text("  Remote: a port on the server reaches a host:port as this machine sees it.".into()),
+        HelpLine::Text("  SOCKS: a proxy on this machine whose traffic leaves through the server.".into()),
+        HelpLine::Text("  A host's tunnels share one ssh connection of their own and run while sshm is open.".into()),
+    ]);
     out.extend([
         HelpLine::Blank,
         head("Mouse"),

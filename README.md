@@ -13,6 +13,8 @@ An SSH session manager that runs in your terminal, in the spirit of MobaXterm or
 - **Many sessions at once**: tabs, an automatic grid of panes, and broadcast to type into all of
   them.
 - **Built-in SFTP**: a two-panel browser with an upload/download queue.
+- **Tunnels**: local, remote and SOCKS port forwarding per host, each turned on and off on its
+  own; they can start with sshm or with a session, and reconnect when the link drops.
 - **Import / export**: `~/.ssh/config`, MobaXterm, Ásbrú, Remmina, JSON, CSV, or an encrypted
   bundle that carries the passwords.
 - **Vim keys everywhere**, mouse support and seven color themes.
@@ -69,7 +71,7 @@ sshm
 ```
 
 In the host list, `n` creates a host and `Enter` connects. `Space` marks several hosts, and
-then `Enter` opens them all in a grid. `s` opens SFTP and `/` searches.
+then `Enter` opens them all in a grid. `s` opens SFTP, `T` the host's tunnels and `/` searches.
 
 Inside a session, every key goes to the remote side except the leader key, `Ctrl+Space`:
 
@@ -80,9 +82,15 @@ Inside a session, every key goes to the remote side except the leader key, `Ctrl
 | `b` | broadcast to every pane in the tab |
 | `p` | type the saved password into a `sudo`/`su` prompt |
 | `s` | SFTP to this host |
+| `T` | tunnels (port forwarding) |
 | `[` | copy mode (vi keys) |
 | `:` | command palette |
 | `?` | every key binding |
+
+In the tunnels tab, `n` adds a tunnel through the host: local (`-L`, say a database only the
+server can reach), remote (`-R`) or a SOCKS proxy (`-D`). `Enter` turns it on or off. A host's
+tunnels share one ssh connection of their own, apart from your sessions, and run while sshm is
+open.
 
 Import and export also work from the command line:
 

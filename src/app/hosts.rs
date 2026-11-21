@@ -48,6 +48,13 @@ impl App {
                 self.store.upsert(host.clone());
                 self.persist_hosts();
                 self.sidebar.select_host(&self.store, &id);
+                let reconnect = old.as_ref().is_some_and(|o| {
+                    (&o.host, o.port, &o.user, &o.identity_file, &o.jump, &o.ssh_args)
+                        != (&host.host, host.port, &host.user, &host.identity_file, &host.jump, &host.ssh_args)
+                });
+                if reconnect && self.tunnels.conns.contains_key(&id) {
+                    self.restart_tunnels(&id);
+                }
                 self.info(if form.editing { "Host updated" } else { "Host created" });
                 let typed: Vec<SecretKind> = changes.iter().map(|(k, _)| *k).collect();
                 self.save_secrets(&id, changes);
@@ -129,7 +136,8 @@ impl App {
     /// `c`: a copy of the host under the cursor, with a new id.
     pub(crate) fn copy_host(&mut self) {
         let Some(h) = self.selected_host().and_then(|id| self.store.get(&id).cloned()) else { return };
-        let copy = Host { id: crate::store::hosts::new_id(), name: format!("{} (copy)", h.name), ..h };
+        let tunnels = h.tunnels.iter().map(|t| crate::store::hosts::Tunnel { id: crate::store::hosts::new_id(), ..t.clone() }).collect();
+        let copy = Host { id: crate::store::hosts::new_id(), name: format!("{} (copy)", h.name), tunnels, ..h };
         let id = copy.id.clone();
         self.store.upsert(copy);
         self.persist_hosts();

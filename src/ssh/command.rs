@@ -21,6 +21,15 @@ pub struct SshSpec {
 pub enum Purpose {
     Shell,
     Sftp,
+    /// `ssh -N` that holds a host's tunnels, added and removed through its own control socket.
+    Tunnel(PathBuf),
+}
+
+/// Options of a tunnel connection that must win over ssh_args and ~/.ssh/config. It is always
+/// its own master (never a client of a session's), and forwards from the config are dropped:
+/// they would clash with the sessions that already set them up.
+fn tunnel_master_opts(socket: &Path) -> [String; 4] {
+    ["ControlMaster=yes".into(), format!("ControlPath={}", socket.display()), "ControlPersist=no".into(), "ClearAllForwardings=yes".into()]
 }
 
 pub fn build(host: &Host, cfg: &Config, ask: Option<&AskPassEnv>, control_dir: Option<&Path>, purpose: Purpose) -> SshSpec {
@@ -41,7 +50,12 @@ pub fn build(host: &Host, cfg: &Config, ask: Option<&AskPassEnv>, control_dir: O
         args.push("-J".into());
         args.push(jump.clone());
     }
-    if let Some(dir) = control_dir.filter(|_| cfg.control_master) {
+    if let Purpose::Tunnel(socket) = &purpose {
+        for o in tunnel_master_opts(socket) {
+            args.push("-o".into());
+            args.push(o);
+        }
+    } else if let Some(dir) = control_dir.filter(|_| cfg.control_master) {
         args.push("-o".into());
         args.push("ControlMaster=auto".into());
         args.push("-o".into());
@@ -58,6 +72,15 @@ pub fn build(host: &Host, cfg: &Config, ask: Option<&AskPassEnv>, control_dir: O
             args.push(host.host.clone());
             args.push("sftp".into());
         }
+        Purpose::Tunnel(_) => {
+            // After ssh_args, so a keepalive set there wins; this one notices a dead link in ~45 s.
+            for o in ["ServerAliveInterval=15", "ServerAliveCountMax=3"] {
+                args.push("-o".into());
+                args.push(o.into());
+            }
+            args.push("-N".into());
+            args.push(host.host.clone());
+        }
     }
 
     let mut env = Vec::new();
@@ -69,6 +92,25 @@ pub fn build(host: &Host, cfg: &Config, ask: Option<&AskPassEnv>, control_dir: O
         env.push((ENV_TOKEN.into(), ask.token.clone()));
     }
     SshSpec { program: cfg.ssh_command.clone(), args, env }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MuxOp {
+    Forward,
+    Cancel,
+}
+
+/// `ssh -O forward|cancel` on a tunnel connection's socket. It reads no config (-F /dev/null):
+/// ssh would otherwise send the host's forwards from ~/.ssh/config along with ours.
+pub fn mux(cfg: &Config, socket: &Path, op: MuxOp, forward: &[String]) -> SshSpec {
+    let op = match op {
+        MuxOp::Forward => "forward",
+        MuxOp::Cancel => "cancel",
+    };
+    let mut args: Vec<String> = vec!["-F".into(), "/dev/null".into(), "-S".into(), socket.display().to_string(), "-O".into(), op.into()];
+    args.extend(forward.iter().cloned());
+    args.push("sshm".into());
+    SshSpec { program: cfg.ssh_command.clone(), args, env: Vec::new() }
 }
 
 /// What ssh asked for through SSH_ASKPASS.
@@ -165,6 +207,39 @@ mod tests {
         let sftp = build(&host, &cfg, None, None, Purpose::Sftp);
         assert_eq!(&sftp.args[sftp.args.len() - 4..], &["-T", "-s", "10.0.0.5", "sftp"]);
         assert!(sftp.env.is_empty());
+    }
+
+    #[test]
+    fn tunnel_connection_and_mux_args() {
+        let host = Host { host: "bastion".into(), ssh_args: vec!["-o".into(), "ServerAliveInterval=5".into()], ..Host::default() };
+        let cfg = Config::default();
+        let spec = build(&host, &cfg, None, Some(Path::new("/run/sshm")), Purpose::Tunnel("/run/sshm/tun-1-2.sock".into()));
+        assert_eq!(
+            spec.args,
+            vec![
+                "-o",
+                "ControlMaster=yes",
+                "-o",
+                "ControlPath=/run/sshm/tun-1-2.sock",
+                "-o",
+                "ControlPersist=no",
+                "-o",
+                "ClearAllForwardings=yes",
+                "-o",
+                "ServerAliveInterval=5",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-N",
+                "bastion"
+            ],
+            "no shared ControlMaster, and the host's own keepalive comes first"
+        );
+
+        let fwd = mux(&cfg, Path::new("/run/sshm/tun-1-2.sock"), MuxOp::Forward, &["-L".into(), "5432:db:5432".into()]);
+        assert_eq!(fwd.args, ["-F", "/dev/null", "-S", "/run/sshm/tun-1-2.sock", "-O", "forward", "-L", "5432:db:5432", "sshm"]);
+        assert_eq!(mux(&cfg, Path::new("/s"), MuxOp::Cancel, &[]).args[5], "cancel");
     }
 
     #[test]

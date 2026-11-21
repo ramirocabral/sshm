@@ -2,6 +2,7 @@ mod dialogs;
 mod form;
 mod sftp;
 pub mod theme;
+mod tunnels;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -28,6 +29,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.layout.body = body;
     app.layout.panes.clear();
     app.layout.sftp_panels.clear();
+    app.layout.tunnel_list = Rect::default();
 
     if sidebar_w > 0 {
         draw_sidebar(f, app, side);
@@ -119,7 +121,10 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                     " "
                 };
                 let indent = if app.sidebar.query.is_empty() { "  ".repeat(*depth) } else { String::new() };
-                let label = if app.sidebar.query.is_empty() { h.name.clone() } else { h.path() };
+                let mut label = if app.sidebar.query.is_empty() { h.name.clone() } else { h.path() };
+                if app.tunnels.is_on(id) {
+                    label.push_str(" ⇄");
+                }
                 let style = if app.sidebar.marked.contains(id) {
                     Style::default().fg(colors().success)
                 } else if connected.contains(id.as_str()) {
@@ -183,6 +188,7 @@ fn draw_tabbar(f: &mut Frame, app: &mut App, area: Rect) {
                 (label, t.broadcast, bell)
             }
             TabKind::Sftp(v) => (tab.title.clone().unwrap_or_else(|| format!("sftp:{}", v.name)), false, false),
+            TabKind::Tunnels(_) => (tab.title.clone().unwrap_or_else(|| tunnels::tab_label(app)), false, false),
         };
         let text = format!(" {}:{}{}{} ", i + 1, label, if broadcast { " ⚡" } else { "" }, if bell { " !" } else { "" });
         let w = (text.chars().count() as u16).min(area.right().saturating_sub(x));
@@ -233,6 +239,10 @@ fn draw_body(f: &mut Frame, app: &mut App, area: Rect) -> Option<Position> {
     match &tab.kind {
         TabKind::Sftp(_) => {
             sftp::draw(f, app, area);
+            None
+        }
+        TabKind::Tunnels(_) => {
+            tunnels::draw(f, app, area);
             None
         }
         TabKind::Terms(t) => {
@@ -369,6 +379,8 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(format!("j/k extend · {}", keymap::hints(Ctx::Visual, &app.leader)), Style::default().fg(colors().subtle)));
     } else if app.focus == Focus::Sidebar {
         spans.push(Span::styled(keymap::hints(Ctx::Hosts, &app.leader), Style::default().fg(colors().subtle)));
+    } else if matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Tunnels(_))) {
+        spans.push(Span::styled(format!("j/k move · {}", keymap::hints(Ctx::Tunnels, &app.leader)), Style::default().fg(colors().subtle)));
     } else {
         spans.push(Span::styled(
             format!("{leader} is the leader key · {leader} ? help · {leader} Tab hosts"),
@@ -382,10 +394,21 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Span::styled(" no vault ", Style::default().fg(colors().subtle).bg(colors().panel_focus))
     };
-    let vault_w = vault.width() as u16;
-    let left_w = area.width.saturating_sub(vault_w + 1);
+    let mut right = Vec::new();
+    match app.tunnels.running() {
+        0 => {}
+        n => {
+            let label = if n == 1 { " ⇄ 1 tunnel ".to_string() } else { format!(" ⇄ {n} tunnels ") };
+            right.push(Span::styled(label, Style::default().fg(colors().on_color).bg(colors().accent)));
+            right.push(Span::raw(" "));
+        }
+    }
+    right.push(vault);
+    let right = Line::from(right);
+    let right_w = right.width() as u16;
+    let left_w = area.width.saturating_sub(right_w + 1);
     f.render_widget(Paragraph::new(Line::from(spans)), Rect { width: left_w, ..area });
-    f.render_widget(Paragraph::new(Line::from(vault)), Rect { x: area.right().saturating_sub(vault_w), width: vault_w, ..area });
+    f.render_widget(Paragraph::new(right), Rect { x: area.right().saturating_sub(right_w), width: right_w, ..area });
 }
 
 #[cfg(test)]

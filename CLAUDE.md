@@ -27,7 +27,7 @@ See README.md for the user-facing feature set.
 cargo test                                   # unit tests, fixtures in tests/fixtures/
 cargo clippy --all-targets -- -D warnings    # must stay clean
 cargo fmt --check                            # rustfmt.toml: max_width 140
-docker compose -f dev/docker-compose.yml -p sshm-dev up -d   # ssh test servers 2221-2223
+docker compose -f dev/docker-compose.yml -p sshm-dev up -d   # ssh test servers 2221-2223 (ssh3 refuses port forwarding)
 ```
 
 Interactive testing without a real terminal: run the binary inside a private tmux server and
@@ -84,6 +84,14 @@ injected as raw SGR sequences with `send-keys -l`.
   `secret-tool` instead of linking D-Bus; `save_secrets` routes each secret to the keyring or
   the vault by the host's source. External tools are killed after a timeout
   (`secrets::run_with_timeout`).
+- **Tunnels** (`app/tunnels.rs`, stored in `Host::tunnels`): the running tunnels of a host share
+  one `ssh -N` (`Purpose::Tunnel`: its own `ControlMaster=yes` socket `tun-<pid>-<n>.sock`, and
+  `ClearAllForwardings` so forwards from ~/.ssh/config do not clash with the sessions'). Each
+  tunnel is added/removed on it with `command::mux` (`ssh -F /dev/null -S sock -O forward|cancel`),
+  so they toggle one by one with a single authentication. The socket appearing means it
+  authenticated. A connection that was up and drops retries with backoff; one that never came up,
+  or got "Permission denied", fails its tunnels. Local ports are test-bound first because ssh
+  reports success when it could bind only ::1. The ssh gets PR_SET_PDEATHSIG and SIGTERM on quit.
 - **Import/export** (`import/`): `import()` → `ImportReport`, `merge()` into the store (does
   not save; callers save hosts.toml and the vault), `export()`. Third-party password
   decryption (MobaXterm AES-CFB8, Ásbrú Blowfish/Crypt::CBC, Remmina 3DES) is verified

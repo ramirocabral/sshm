@@ -7,6 +7,7 @@ mod jobs;
 pub mod keymap;
 pub mod sftp;
 pub mod sidebar;
+pub mod tunnels;
 pub mod widgets;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -25,7 +26,7 @@ use crate::secrets::{self, SecretKind, Vault};
 use crate::ssh::askpass::{self, AskPassRequest};
 use crate::ssh::command::{self, AskPassEnv, PromptKind, Purpose, SessionPrompt};
 use crate::store::config::{Config, KeySpec};
-use crate::store::hosts::{HostStore, SecretSource, new_id};
+use crate::store::hosts::{HostStore, SecretSource, TunnelStart, new_id};
 use crate::store::state::UiState;
 use crate::term::pane::{GridSize, PaneId, PaneNotify, TermPane};
 use dialogs::*;
@@ -38,6 +39,7 @@ pub enum AppEvent {
     /// The result of background work, applied on the UI thread.
     Apply(jobs::Apply),
     Sftp(u64, sftp::SftpEvent),
+    Tunnel(tunnels::TunnelEvent),
     Tick,
 }
 
@@ -72,6 +74,7 @@ pub struct TermTab {
 pub enum TabKind {
     Terms(TermTab),
     Sftp(Box<sftp::SftpView>),
+    Tunnels(tunnels::TunnelsView),
 }
 
 pub struct Tab {
@@ -96,6 +99,7 @@ pub struct LayoutCache {
     pub tabs: Vec<(usize, Rect)>,
     pub panes: Vec<(PaneId, Rect)>,
     pub sftp_panels: Vec<(bool, Rect)>,
+    pub tunnel_list: Rect,
     pub form_rows: Vec<(usize, Rect)>,
     pub popup_rows: Vec<(usize, Rect)>,
     pub help_max_scroll: u16,
@@ -124,6 +128,7 @@ pub struct App {
     pub askpass_sock: PathBuf,
     pub runtime_dir: PathBuf,
     pub owners: HashMap<String, Owner>,
+    pub tunnels: tunnels::Tunnels,
     pub layout: LayoutCache,
     pub truecolor: bool,
     pub quit: bool,
@@ -196,6 +201,7 @@ impl App {
             askpass_sock,
             runtime_dir,
             owners: HashMap::new(),
+            tunnels: tunnels::Tunnels::default(),
             layout: LayoutCache::default(),
             truecolor,
             quit: false,
@@ -250,7 +256,9 @@ impl App {
             AppEvent::AskPass(req) => self.handle_askpass(req),
             AppEvent::Apply(f) => f(self),
             AppEvent::Sftp(tab, ev) => self.handle_sftp_event(tab, ev),
+            AppEvent::Tunnel(ev) => self.handle_tunnel_event(ev),
             AppEvent::Tick => {
+                self.dirty |= self.tunnels_tick();
                 if self.toast.as_ref().is_some_and(|t| t.1.elapsed() > Duration::from_secs(4)) {
                     self.toast = None;
                     self.dirty = true;
@@ -352,6 +360,9 @@ impl App {
         };
         tracing::info!(pane = id, host = %name, "opening session");
         let term = TermPane::spawn(id, cmd, size, self.cfg.scrollback, self.notifier())?;
+        if let Some(hid) = host_id {
+            self.autostart_tunnels(TunnelStart::Connect, Some(hid));
+        }
         self.panes.insert(
             id,
             Pane {
@@ -480,6 +491,7 @@ impl App {
             TabKind::Sftp(v) => {
                 self.owners.remove(&v.token);
             }
+            TabKind::Tunnels(_) => {}
         }
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
@@ -1000,10 +1012,12 @@ pub async fn run(cfg: Config) -> Result<()> {
         });
     }
 
+    tunnels::remove_stale_sockets(&runtime_dir);
     let mut app = App::new(cfg, tx, sock.clone(), runtime_dir)?;
     if app.store.hosts.is_empty() {
         app.info("No hosts yet: n creates one, i imports (e.g. ~/.ssh/config)");
     }
+    app.autostart_tunnels(TunnelStart::Launch, None);
 
     let result: Result<()> = async {
         let mut last_draw: Option<Instant> = None;
@@ -1041,6 +1055,7 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
     .await;
 
+    app.tunnels.shutdown();
     app.vault_writer.finish();
     crate::tui::leave()?;
     let _ = std::fs::remove_file(&sock);

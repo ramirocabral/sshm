@@ -43,6 +43,13 @@ impl App {
             self.sftp_mouse(m);
             return;
         }
+        if matches!(self.tabs.get(self.active).map(|t| &t.kind), Some(super::super::TabKind::Tunnels(_))) {
+            if matches!(m.kind, MouseEventKind::Down(_)) {
+                self.focus = Focus::Main;
+            }
+            self.tunnels_mouse(m);
+            return;
+        }
         let target = match self.mouse.selecting {
             Some(id) => self.layout.panes.iter().find(|(p, _)| *p == id).copied(),
             None => self.layout.panes.iter().find(|(_, r)| contains(*r, x, y)).copied(),

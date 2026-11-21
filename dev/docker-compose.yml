@@ -1,4 +1,5 @@
 # Test SSH servers: user "tester", password "tester-pass" (also for sudo).
+# ssh1 and ssh2 allow port forwarding (tunnels); ssh3 refuses it, like many locked-down servers.
 x-ssh: &ssh
   image: lscr.io/linuxserver/openssh-server:latest
   environment:
@@ -16,10 +17,12 @@ services:
     <<: *ssh
     hostname: ssh1
     ports: ["127.0.0.1:2221:2222"]
+    volumes: ["./allow-forwarding.sh:/custom-cont-init.d/allow-forwarding.sh:ro"]
   ssh2:
     <<: *ssh
     hostname: ssh2
     ports: ["127.0.0.1:2222:2222"]
+    volumes: ["./allow-forwarding.sh:/custom-cont-init.d/allow-forwarding.sh:ro"]
   ssh3:
     <<: *ssh
     hostname: ssh3

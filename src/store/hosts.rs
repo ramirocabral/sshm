@@ -127,6 +127,181 @@ pub struct Host {
     pub on_connect: Option<String>,
     /// Extra arguments passed to ssh, e.g. ["-o", "ServerAliveInterval=30"].
     pub ssh_args: Vec<String>,
+    /// Port forwardings that go through this host.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tunnels: Vec<Tunnel>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TunnelKind {
+    /// `-L`: a port on this machine reaches host:port as seen from the server.
+    #[default]
+    Local,
+    /// `-R`: a port on the server reaches host:port as seen from this machine.
+    Remote,
+    /// `-D`: a SOCKS proxy on this machine whose traffic leaves through the server.
+    Dynamic,
+}
+
+impl TunnelKind {
+    pub const ALL: [TunnelKind; 3] = [TunnelKind::Local, TunnelKind::Remote, TunnelKind::Dynamic];
+
+    pub fn value(self) -> &'static str {
+        match self {
+            TunnelKind::Local => "local",
+            TunnelKind::Remote => "remote",
+            TunnelKind::Dynamic => "dynamic",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.value() == s)
+    }
+
+    pub fn flag(self) -> &'static str {
+        match self {
+            TunnelKind::Local => "-L",
+            TunnelKind::Remote => "-R",
+            TunnelKind::Dynamic => "-D",
+        }
+    }
+
+    /// Short name for lists.
+    pub fn label(self) -> &'static str {
+        match self {
+            TunnelKind::Local => "local",
+            TunnelKind::Remote => "remote",
+            TunnelKind::Dynamic => "socks",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TunnelStart {
+    /// Only when turned on in the tunnels tab.
+    #[default]
+    Manual,
+    /// When sshm starts.
+    Launch,
+    /// When a session to the host opens.
+    Connect,
+}
+
+impl TunnelStart {
+    pub const ALL: [TunnelStart; 3] = [TunnelStart::Manual, TunnelStart::Launch, TunnelStart::Connect];
+
+    pub fn value(self) -> &'static str {
+        match self {
+            TunnelStart::Manual => "manual",
+            TunnelStart::Launch => "launch",
+            TunnelStart::Connect => "connect",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.value() == s)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Tunnel {
+    pub id: String,
+    pub name: String,
+    pub kind: TunnelKind,
+    /// Where the port listens (the server for remote tunnels, this machine otherwise); empty = localhost.
+    pub bind_address: String,
+    pub bind_port: u16,
+    /// Where connections are sent; empty = localhost. SOCKS tunnels have none.
+    pub dest_host: String,
+    pub dest_port: u16,
+    pub start: TunnelStart,
+}
+
+impl Default for Tunnel {
+    fn default() -> Self {
+        Tunnel {
+            id: new_id(),
+            name: String::new(),
+            kind: TunnelKind::Local,
+            bind_address: String::new(),
+            bind_port: 0,
+            dest_host: String::new(),
+            dest_port: 0,
+            start: TunnelStart::Manual,
+        }
+    }
+}
+
+/// An address as ssh's forwarding syntax wants it: IPv6 literals go in brackets.
+fn fwd_addr(a: &str) -> String {
+    if a.contains(':') && !a.starts_with('[') { format!("[{a}]") } else { a.to_string() }
+}
+
+impl Tunnel {
+    fn bind(&self) -> &str {
+        match self.bind_address.trim() {
+            "" => "localhost",
+            a => a,
+        }
+    }
+
+    fn dest(&self) -> &str {
+        match self.dest_host.trim() {
+            "" => "localhost",
+            h => h,
+        }
+    }
+
+    /// The argument of -L/-R/-D: `[bind:]port[:host:hostport]`.
+    pub fn spec(&self) -> String {
+        let mut s = match self.bind_address.trim() {
+            "" => String::new(),
+            a => format!("{}:", fwd_addr(a)),
+        };
+        s.push_str(&self.bind_port.to_string());
+        if self.kind != TunnelKind::Dynamic {
+            s.push_str(&format!(":{}:{}", fwd_addr(self.dest()), self.dest_port));
+        }
+        s
+    }
+
+    pub fn forward_args(&self) -> Vec<String> {
+        vec![self.kind.flag().to_string(), self.spec()]
+    }
+
+    /// Where the port listens, e.g. "localhost:5432".
+    pub fn listen(&self) -> String {
+        format!("{}:{}", fwd_addr(self.bind()), self.bind_port)
+    }
+
+    /// "localhost:5432 → db:5432", or the listening address of a SOCKS proxy.
+    pub fn summary(&self) -> String {
+        match self.kind {
+            TunnelKind::Dynamic => self.listen(),
+            _ => format!("{} → {}:{}", self.listen(), fwd_addr(self.dest()), self.dest_port),
+        }
+    }
+
+    /// The name, or the summary when it has none.
+    pub fn title(&self) -> String {
+        if self.name.trim().is_empty() { self.summary() } else { self.name.trim().to_string() }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.bind_port == 0 {
+            return Err("the port to listen on is required".into());
+        }
+        if self.kind != TunnelKind::Dynamic && self.dest_port == 0 {
+            return Err("the destination port is required".into());
+        }
+        if [&self.bind_address, &self.dest_host].iter().any(|a| a.trim().contains(char::is_whitespace)) {
+            return Err("an address cannot contain spaces".into());
+        }
+        Ok(())
+    }
 }
 
 impl Default for Host {
@@ -147,6 +322,7 @@ impl Default for Host {
             auto_sudo: false,
             on_connect: None,
             ssh_args: Vec::new(),
+            tunnels: Vec::new(),
         }
     }
 }
@@ -342,6 +518,10 @@ impl HostStore {
 
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Host> {
         self.hosts.iter_mut().find(|h| h.id == id)
+    }
+
+    pub fn tunnel(&self, host_id: &str, tunnel_id: &str) -> Option<&Tunnel> {
+        self.get(host_id)?.tunnels.iter().find(|t| t.id == tunnel_id)
     }
 
     #[cfg(test)]
@@ -540,6 +720,53 @@ mod tests {
         assert!(!a.reload_if_changed().unwrap());
         assert!(a.save().is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "host = 3");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn tunnel_specs() {
+        let db = Tunnel { bind_port: 5432, dest_host: "db.internal".into(), dest_port: 5432, ..Tunnel::default() };
+        assert_eq!(db.forward_args(), ["-L", "5432:db.internal:5432"]);
+        assert_eq!(db.summary(), "localhost:5432 → db.internal:5432");
+        assert_eq!(db.title(), db.summary());
+
+        let hook = Tunnel {
+            name: "webhook".into(),
+            kind: TunnelKind::Remote,
+            bind_address: "0.0.0.0".into(),
+            bind_port: 9000,
+            dest_port: 3000,
+            ..Tunnel::default()
+        };
+        assert_eq!(hook.forward_args(), ["-R", "0.0.0.0:9000:localhost:3000"]);
+        assert_eq!(hook.title(), "webhook");
+
+        let socks = Tunnel { kind: TunnelKind::Dynamic, bind_address: "::1".into(), bind_port: 1080, dest_port: 9, ..Tunnel::default() };
+        assert_eq!(socks.forward_args(), ["-D", "[::1]:1080"]);
+        assert_eq!(socks.summary(), "[::1]:1080");
+        assert!(socks.validate().is_ok());
+
+        assert!(Tunnel { bind_port: 80, ..Tunnel::default() }.validate().unwrap_err().contains("destination port"));
+        assert!(Tunnel::default().validate().is_err());
+        assert!(Tunnel { dest_host: "a b".into(), ..db.clone() }.validate().is_err());
+    }
+
+    #[test]
+    fn tunnels_live_in_hosts_toml() {
+        let dir = std::env::temp_dir().join(format!("sshm-test-{}", new_id()));
+        let path = dir.join("hosts.toml");
+        let mut store = HostStore::load(path.clone()).unwrap();
+        let tunnel = Tunnel { name: "pg".into(), bind_port: 5432, dest_port: 5432, start: TunnelStart::Connect, ..Tunnel::default() };
+        store.upsert(Host { name: "bastion".into(), host: "b".into(), tunnels: vec![tunnel.clone()], ..Host::default() });
+        store.upsert(Host { name: "plain".into(), host: "p".into(), ..Host::default() });
+        store.save().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[[host.tunnels]]") && text.contains("start = \"connect\""));
+        assert_eq!(text.matches("tunnels").count(), 1, "hosts without tunnels leave the key out:\n{text}");
+        let loaded = HostStore::load(path).unwrap();
+        assert_eq!(loaded.hosts, store.hosts);
+        let id = loaded.hosts[0].id.clone();
+        assert_eq!(loaded.tunnel(&id, &tunnel.id), Some(&tunnel));
         std::fs::remove_dir_all(dir).ok();
     }
 
