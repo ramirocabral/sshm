@@ -12,8 +12,7 @@ An SSH session manager that runs in your terminal, in the spirit of MobaXterm or
 - **Plain `ssh` underneath**: `~/.ssh/config`, ProxyJump, ssh-agent and FIDO keys work as usual.
 - **Many sessions at once**: tabs, an automatic grid of panes, and broadcast to type into all of
   them.
-- **Built-in SFTP**: a two-panel browser with an upload/download queue. It reuses the session's
-  connection, so you don't log in twice.
+- **Built-in SFTP**: a two-panel browser with an upload/download queue.
 - **Import / export**: `~/.ssh/config`, MobaXterm, Ásbrú, Remmina, JSON, CSV, or an encrypted
   bundle that carries the passwords.
 - **Vim keys everywhere**, mouse support and seven color themes.
@@ -55,9 +54,6 @@ Build and install to `~/.local/bin` (`PREFIX=/some/dir` installs somewhere else)
 git clone https://github.com/ramirocabral/sshm && cd sshm
 ./install.sh
 ```
-
-`install.sh` checks the dependencies but never installs packages. On other distros it prints
-the command for yours.
 
 Uninstall (your hosts and vault are kept):
 
@@ -105,8 +101,3 @@ theme = "default"       # light, nord, gruvbox, dracula, catppuccin, solarized
 vault_timeout = 0       # seconds idle before the vault locks again (0 = never)
 scrollback = 10000
 ```
-
-Each host chooses where its password comes from: `keyring`, `vault`, `none`, `bw:<item>`,
-`rbw:<item>`, `op://vault/item/field` or `cmd:<command>`. Hosts are kept in
-`~/.local/share/sshm/hosts.toml`, without secrets. The vault is `vault.age` in the same folder,
-a standard age file.
